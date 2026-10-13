@@ -24,6 +24,8 @@ OBJS := $(ARCH_DIR)/boot.o \
         $(ARCH_DIR)/mailbox.o \
         $(ARCH_DIR)/gpio.o \
         $(ARCH_DIR)/dwc2.o \
+        $(ARCH_DIR)/exception.o \
+        $(ARCH_DIR)/irq.o \
         $(ARCH_DIR)/main.o
 
 DEPS := $(OBJS:.o=.d)

@@ -3,6 +3,7 @@
 #include "mailbox.h"
 #include "gpio.h"
 #include "dwc2.h"
+#include "irq.h"
 #include "version.h"
 
 /* What the firmware hands over, printed so a serial console shows the port is alive and
@@ -38,7 +39,10 @@ void arm_main(void)
         uart_puts(" MB\n");
     }
 
+    irq_init();
+    timer_init(100);                      /* a 100 Hz tick, as tOS uses on x86 */
     uart_puts("\n[OK] early boot reached C\n");
+    uart_puts("[OK] interrupts and timer running\n");
 
     /* The activity LED proves the GPIO block responds; it is on a different pin per model
      * (and on the Pi 3 it hangs off the GPIO expander, where writing here does nothing --
@@ -115,6 +119,7 @@ void shell(void)
             uart_puts("mem             how much memory the firmware gave the ARM side\n");
             uart_puts("board           which Raspberry Pi this is\n");
             uart_puts("usb             bring the USB controller up and list what is attached\n");
+            uart_puts("uptime          how long the board has been running\n");
             uart_puts("reboot          restart the board\n");
         } else if (str_eq(argv[0], "gpio") && argc >= 3) {
             int pin = parse_int(argv[1]), val = parse_int(argv[2]);
@@ -157,6 +162,14 @@ void shell(void)
                 uart_put_hex(d->dev_class);
                 uart_puts("\n");
             }
+        } else if (str_eq(argv[0], "uptime")) {
+            uint64_t us = timer_us();
+            uart_put_dec(us / 1000000);
+            uart_puts(".");
+            uart_put_dec((us / 1000) % 1000);
+            uart_puts(" s, ");
+            uart_put_dec(timer_ticks());
+            uart_puts(" ticks\n");
         } else if (str_eq(argv[0], "reboot")) {
             uart_puts("rebooting\n");
             /* the watchdog, set to the shortest timeout, is how a Pi restarts itself */
