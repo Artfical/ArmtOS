@@ -1,0 +1,73 @@
+# Every push to main produces a bootable Raspberry Pi card image and publishes it as a
+# release called "build @<commit>", so any commit can be written to an SD card and tried
+# on real hardware without building anything locally.
+
+name: build image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the cross toolchain and image tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gcc-aarch64-linux-gnu parted dosfstools mtools qemu-system-arm
+
+      - name: Build kernel8.img
+        run: make -f Makefile.arm64
+
+      - name: Fetch the Raspberry Pi firmware
+        # The GPU firmware is what loads our kernel; including it makes the image boot on a
+        # blank card. Only the few files a Pi actually reads are fetched, not the whole repo.
+        run: |
+          mkdir -p firmware
+          base=https://raw.githubusercontent.com/raspberrypi/firmware/stable/boot
+          for f in bootcode.bin start.elf start4.elf fixup.dat fixup4.dat \
+                   bcm2710-rpi-3-b.dtb bcm2711-rpi-4-b.dtb; do
+            curl -sfSL "$base/$f" -o "firmware/$f" || echo "skipped $f"
+          done
+          ls -la firmware
+
+      - name: Smoke-test the kernel in the Raspberry Pi emulator
+        # A build that no longer reaches C is not worth releasing, so the image is only
+        # published once the emulated Pi has printed the banner.
+        run: |
+          timeout 25 qemu-system-aarch64 -M raspi3b -kernel kernel8.img \
+              -serial stdio -display none > boot.log 2>&1 || true
+          cat boot.log
+          grep -q "early boot reached C" boot.log
+
+      - name: Build the card image
+        run: |
+          SHORT=$(git rev-parse --short HEAD)
+          ./tools/image/mkimage.sh "armtos-$SHORT.img" firmware
+          gzip -9 -k "armtos-$SHORT.img"
+          ls -la armtos-*
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHORT=$(git rev-parse --short HEAD)
+          SUBJECT=$(git log -1 --pretty=%s)
+          gh release create "build-$SHORT" \
+             --title "build @$SHORT" \
+             --notes "$SUBJECT
+
+          Write to an SD card with:
+          \`\`\`
+          gunzip -c armtos-$SHORT.img.gz | sudo dd of=/dev/sdX bs=4M conv=fsync
+          \`\`\`
+          Then connect a serial console to the header at 115200 baud (GPIO 14/15)." \
+             "armtos-$SHORT.img.gz" \
+             "kernel8.img"
