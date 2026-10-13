@@ -229,6 +229,8 @@ KERNEL_OBJS = \
     kernel/net/chacha20.o \
     kernel/net/wgtun.o \
     kernel/net/sha256.o \
+    kernel/net/sha1.o \
+    kernel/net/websocket.o \
     kernel/net/sha512.o \
     kernel/net/rsa.o \
     kernel/net/x509.o \

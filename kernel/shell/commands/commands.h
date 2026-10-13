@@ -34,6 +34,7 @@ void cmd_uname(int argc, char **args);
 void cmd_ping(int argc, char **args);
 void cmd_ifconfig(int argc, char **args);
 void cmd_wget(int argc, char **args);
+void cmd_ws(int argc, char **args);
 void cmd_tls(int argc, char **args);
 void cmd_tpkg(int argc, char **args);
 void cmd_sctp_connect(int argc, char **args);

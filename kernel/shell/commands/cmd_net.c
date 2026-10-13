@@ -8,6 +8,7 @@
 #include "icmp.h"
 #include "http.h"
 #include "https.h"
+#include "websocket.h"
 #include "tls.h"
 #include "x509.h"
 #include "tsharp.h"
@@ -1277,4 +1278,81 @@ void cmd_wg(int argc, char **args)
     } else {
         terminal_writestring("wg: unknown subcommand\n");
     }
+}
+
+/* ---- ws: a WebSocket client, so live services can be talked to from the shell ---- */
+
+void cmd_ws(int argc, char **args)
+{
+    if (argc < 2) {
+        terminal_writestring("usage: ws <ws://host[:port]/path | wss://...> [message]\n");
+        terminal_writestring("  Connects, sends the message if one is given, then prints what\n");
+        terminal_writestring("  arrives until the server closes or 10 seconds pass quietly.\n");
+        return;
+    }
+    const char *url = args[1];
+    int use_tls = 0;
+    if (strncmp(url, "wss://", 6) == 0) { use_tls = 1; url += 6; }
+    else if (strncmp(url, "ws://", 5) == 0) { url += 5; }
+    else { terminal_writestring("ws: only ws:// and wss:// are supported\n"); return; }
+
+    char host[256], path[256];
+    int i = 0;
+    while (*url && *url != '/' && *url != ':' && i < 255) host[i++] = *url++;
+    host[i] = 0;
+    uint16_t port = use_tls ? 443 : 80;
+    if (*url == ':') {
+        url++;
+        uint32_t pv = 0; int pd = 0;
+        while (*url >= '0' && *url <= '9') { pv = pv * 10 + (uint32_t)(*url - '0'); url++; if (++pd > 5) break; }
+        if (pd == 0 || pv == 0 || pv > 65535) { terminal_writestring("ws: invalid port\n"); return; }
+        port = (uint16_t)pv;
+    }
+    if (*url == '/') { int j = 0; while (*url && j < 255) path[j++] = *url++; path[j] = 0; }
+    else { path[0] = '/'; path[1] = 0; }
+
+    uint32_t ip;
+    int is_ip = 1;
+    for (const char *p = host; *p; p++) if ((*p < '0' || *p > '9') && *p != '.') { is_ip = 0; break; }
+    if (is_ip) {
+        if (parse_ipv4(host, &ip) != 0) { terminal_writestring("ws: invalid IP address\n"); return; }
+    } else {
+        terminal_writestring("Resolving... ");
+        int rc = dns_resolve(host, &ip);
+        if (rc != 0) { terminal_writestring("FAILED\n"); return; }
+        terminal_writestring("OK\n");
+    }
+
+    ws_t *ws = (ws_t *)malloc(sizeof(ws_t));
+    if (!ws) { terminal_writestring("ws: out of memory\n"); return; }
+    terminal_writestring("Connecting... ");
+    if (ws_connect(ws, ip, host, port, path, use_tls) != 0) {
+        terminal_writestring("FAILED (see dmesg)\n");
+        free(ws);
+        return;
+    }
+    terminal_writestring("connected\n");
+
+    if (argc >= 3) {
+        if (ws_send_text(ws, args[2]) != 0) terminal_writestring("ws: send failed\n");
+        else { terminal_writestring("> "); terminal_writestring(args[2]); terminal_putchar('\n'); }
+    }
+
+    uint8_t *buf = (uint8_t *)malloc(4096);
+    if (buf) {
+        for (int msgs = 0; msgs < 100; msgs++) {
+            int op = 0;
+            int n = ws_recv(ws, buf, 4095, &op, 10000);
+            if (n <= 0) break;
+            buf[n] = 0;
+            terminal_writestring("< ");
+            if (op == WS_TEXT) terminal_writestring((const char *)buf);
+            else { terminal_writestring("["); print_num(n); terminal_writestring(" binary bytes]"); }
+            terminal_putchar('\n');
+        }
+        free(buf);
+    }
+    ws_close(ws);
+    free(ws);
+    terminal_writestring("closed\n");
 }
