@@ -181,9 +181,15 @@ static int parse_spki(const uint8_t *v, uint32_t l, x509_cert_t *c)
     if (OID_IS(oid, ol, 0x2A,0x86,0x48,0xCE,0x3D,0x02,0x01)) {
         const uint8_t *cv; uint32_t cl;
         if (der_expect(&ai, 0x06, &cv, &cl, 0) != 0 || !der_done(&ai)) return 0;
-        if (!OID_IS(cv, cl, 0x2A,0x86,0x48,0xCE,0x3D,0x03,0x01,0x07)) return 0;     /* not P-256 */
-        if (kv[0] != 0 || kl != 1 + 65 || kv[1] != 4) return 0;                      /* unused bits / not uncompressed */
-        memcpy(c->ec_point, kv + 1, 65);
+        int curve = 0;
+        if (OID_IS(cv, cl, 0x2A,0x86,0x48,0xCE,0x3D,0x03,0x01,0x07)) curve = EC_CURVE_P256;   /* prime256v1 */
+        else if (OID_IS(cv, cl, 0x2B,0x81,0x04,0x00,0x22)) curve = EC_CURVE_P384;             /* secp384r1 */
+        else return 0;                                                                        /* a curve we cannot do */
+        uint32_t want = 1 + 2 * (uint32_t)ec_curve_coord_len(curve);
+        if (kv[0] != 0 || kl != 1 + want || kv[1] != 4) return 0;    /* unused bits / not uncompressed */
+        memcpy(c->ec_point, kv + 1, want);
+        c->ec_point_len = want;
+        c->ec_curve = curve;
         c->has_ec_key = 1;
         return 0;
     }
@@ -473,8 +479,8 @@ int x509_host_matches(const x509_cert_t *c, const char *host)
 /* ---------------------------------------------------------- signature --- */
 
 /* An ECDSA signature is DER: SEQUENCE { INTEGER r, INTEGER s }, each of which may carry a
- * leading zero (or be short) and has to be laid out as a fixed 32-byte value. */
-static int ecdsa_sig_split(const uint8_t *sig, uint32_t len, uint8_t r[32], uint8_t s[32])
+ * leading zero (or be short) and has to be laid out as a fixed-width value for the curve. */
+static int ecdsa_sig_split(const uint8_t *sig, uint32_t len, uint8_t *r, uint8_t *s, int clen)
 {
     der_it it = der_sub(sig, len);
     const uint8_t *sv; uint32_t sl;
@@ -485,9 +491,9 @@ static int ecdsa_sig_split(const uint8_t *sig, uint32_t len, uint8_t r[32], uint
     if (rl == 0 || svl == 0 || (rv[0] & 0x80) || (svv[0] & 0x80)) return -1;   /* negative */
     while (rl > 1 && rv[0] == 0) { rv++; rl--; }
     while (svl > 1 && svv[0] == 0) { svv++; svl--; }
-    if (rl > 32 || svl > 32) return -1;
-    memset(r, 0, 32); memcpy(r + (32 - rl), rv, rl);
-    memset(s, 0, 32); memcpy(s + (32 - svl), svv, svl);
+    if ((int)rl > clen || (int)svl > clen) return -1;
+    memset(r, 0, (size_t)clen); memcpy(r + (clen - (int)rl), rv, rl);
+    memset(s, 0, (size_t)clen); memcpy(s + (clen - (int)svl), svv, svl);
     return 0;
 }
 
@@ -506,9 +512,11 @@ int x509_check_signature(const x509_cert_t *c, const x509_cert_t *issuer)
         /* The signature algorithm names the key it must have been made with: an ECDSA
          * signature can only be checked against the issuer's EC key. */
         if (!issuer->has_ec_key) return X509_ERR_UNSUPPORTED_KEY;
-        uint8_t r[32], sg[32];
-        if (ecdsa_sig_split(c->sig, c->sig_len, r, sg) != 0) return X509_ERR_BAD_SIGNATURE;
-        return p256_ecdsa_verify(issuer->ec_point, r, sg, digest, dlen) == 0
+        int clen = ec_curve_coord_len(issuer->ec_curve);
+        uint8_t r[EC_MAX_COORD_LEN], sg[EC_MAX_COORD_LEN];
+        if (clen == 0 || ecdsa_sig_split(c->sig, c->sig_len, r, sg, clen) != 0) return X509_ERR_BAD_SIGNATURE;
+        return ec_ecdsa_verify(issuer->ec_curve, issuer->ec_point, issuer->ec_point_len,
+                               r, sg, digest, dlen) == 0
                ? X509_OK : X509_ERR_BAD_SIGNATURE;
     }
     if (!issuer->has_rsa_key) return X509_ERR_UNSUPPORTED_KEY;
@@ -657,7 +665,7 @@ const char *x509_strerror(int err)
     switch (err) {
     case X509_OK:                   return "ok";
     case X509_ERR_MALFORMED:        return "malformed certificate";
-    case X509_ERR_UNSUPPORTED_KEY:  return "unsupported public key (need RSA 2048-4096)";
+    case X509_ERR_UNSUPPORTED_KEY:  return "unsupported public key (RSA 2048-4096, or EC P-256/P-384)";
     case X509_ERR_SIG_ALG:          return "unsupported signature algorithm";
     case X509_ERR_WEAK_SIG_ALG:     return "weak (SHA-1/MD5) signature algorithm";
     case X509_ERR_BAD_SIGNATURE:    return "certificate signature is invalid";

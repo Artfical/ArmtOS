@@ -97,7 +97,7 @@ static int ct_equal(const uint8_t *a, const uint8_t *b, int n)
 
 /* A TLS ECDSA signature is the same DER SEQUENCE { INTEGER r, INTEGER s } a certificate
  * carries; both integers are laid out as fixed 32-byte values for the curve code. */
-static int ecdsa_sig_to_rs(const uint8_t *sig, uint32_t len, uint8_t r[32], uint8_t s[32])
+static int ecdsa_sig_to_rs(const uint8_t *sig, uint32_t len, uint8_t *r, uint8_t *s, int clen)
 {
     if (len < 8 || sig[0] != 0x30) return -1;
     uint32_t off = 2, seq_len = sig[1];
@@ -112,14 +112,14 @@ static int ecdsa_sig_to_rs(const uint8_t *sig, uint32_t len, uint8_t r[32], uint
         if (off + 2 > len || sig[off] != 0x02) return -1;
         uint32_t il = sig[off + 1];
         off += 2;
-        if (il == 0 || il > 33 || off + il > len) return -1;
+        if (il == 0 || il > (uint32_t)clen + 1 || off + il > len) return -1;
         const uint8_t *iv = sig + off;
         off += il;
         if (iv[0] & 0x80) return -1;            /* negative */
         while (il > 1 && iv[0] == 0) { iv++; il--; }
-        if (il > 32) return -1;
-        memset(dst[i], 0, 32);
-        memcpy(dst[i] + (32 - il), iv, il);
+        if ((int)il > clen) return -1;
+        memset(dst[i], 0, (size_t)clen);
+        memcpy(dst[i] + (clen - (int)il), iv, il);
     }
     return off == len ? 0 : -1;
 }
@@ -778,7 +778,9 @@ int tls_connect(tls_ctx_t *ctx, uint32_t ip, uint16_t port, const char *sni_host
     uint8_t rsa_mod[RSA_MAX_BYTES];
     int rsa_mod_len = 0;
     uint32_t rsa_exp = 65537;
-    uint8_t ec_pub[65];
+    uint8_t ec_pub[EC_MAX_PUBKEY_LEN];
+    uint32_t ec_pub_len = 0;
+    int ec_curve = 0;
     int found_key = 0;
     int got_cert = 0;
     int got_done = 0;
@@ -856,7 +858,11 @@ int tls_connect(tls_ctx_t *ctx, uint32_t ip, uint16_t port, const char *sni_host
                 rsa_mod_len = (int)leaf.n_len;
                 rsa_exp = leaf.e;
             }
-            if (leaf.has_ec_key) memcpy(ec_pub, leaf.ec_point, sizeof(ec_pub));
+            if (leaf.has_ec_key) {
+                memcpy(ec_pub, leaf.ec_point, leaf.ec_point_len);
+                ec_pub_len = leaf.ec_point_len;
+                ec_curve = leaf.ec_curve;
+            }
             found_key = 1;
         } else if (ht == TLS_HT_SERVER_DONE) {
             if (!got_cert) { tls_log("ServerHelloDone before the Certificate"); goto fail; }
@@ -911,9 +917,10 @@ int tls_connect(tls_ctx_t *ctx, uint32_t ip, uint16_t port, const char *sni_host
             else { tls_log("server used a hash we did not offer for its key exchange"); goto fail; }
             int sig_ok;
             if (sig_alg[1] == 3) {
-                uint8_t sr[32], ss[32];
-                sig_ok = ecdsa_sig_to_rs(sig, sig_len, sr, ss) == 0 &&
-                         p256_ecdsa_verify(ec_pub, sr, ss, digest, digest_len) == 0;
+                int clen = ec_curve_coord_len(ec_curve);
+                uint8_t sr[EC_MAX_COORD_LEN], ss[EC_MAX_COORD_LEN];
+                sig_ok = clen != 0 && ecdsa_sig_to_rs(sig, sig_len, sr, ss, clen) == 0 &&
+                         ec_ecdsa_verify(ec_curve, ec_pub, ec_pub_len, sr, ss, digest, digest_len) == 0;
             } else {
                 sig_ok = rsa_pkcs1_verify(rsa_mod, rsa_mod_len, rsa_exp, hash_id, digest, sig, (int)sig_len) == 0;
             }

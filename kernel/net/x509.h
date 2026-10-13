@@ -2,6 +2,7 @@
 #define X509_H
 
 #include <stdint.h>
+#include "p256.h"
 
 /* X.509 v3 certificate parsing, host name matching and chain validation
  * (RFC 5280 / RFC 6125 subset): RSA keys of 2048-4096 bits and PKCS#1 v1.5
@@ -49,10 +50,12 @@ typedef struct {
     const uint8_t *n;       uint32_t n_len;         /* RSA modulus, leading zeros stripped */
     uint32_t       e;
     int            has_rsa_key;
-    /* An EC key on P-256, the other kind of certificate in common use. `ec_point` is the
-     * uncompressed 65-byte form; curves other than P-256 leave has_ec_key clear. */
-    int            has_ec_key;
-    uint8_t        ec_point[65];
+    /* An EC key, the other kind of certificate in common use: `ec_curve` is an EC_CURVE_*
+     * value and `ec_point` the uncompressed form (65 bytes on P-256, 97 on P-384). A curve
+     * this code cannot do leaves has_ec_key clear. */
+    int            has_ec_key, ec_curve;
+    uint32_t       ec_point_len;
+    uint8_t        ec_point[EC_MAX_PUBKEY_LEN];
     x509_time_t    not_before, not_after;
     int            has_bc, is_ca, path_len;         /* basicConstraints; path_len -1 = unlimited */
     int            has_ku;  uint16_t ku;            /* keyUsage: bit i set = named bit i of the BIT STRING (see X509_KU_*) */
