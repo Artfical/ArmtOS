@@ -39,13 +39,24 @@ jobs:
           ls -la firmware
 
       - name: Smoke-test the kernel in the Raspberry Pi emulator
-        # A build that no longer reaches C is not worth releasing, so the image is only
-        # published once the emulated Pi has printed the banner.
+        # A release that cannot boot is worse than no release, so the image is published
+        # only after the emulated Pi has reached C, turned the MMU on, started its timer,
+        # read an SD card and enumerated a USB device.
         run: |
-          timeout 25 qemu-system-aarch64 -M raspi3b -kernel kernel8.img \
-              -serial stdio -display none > boot.log 2>&1 || true
+          truncate -s 64M test.img
+          parted -s test.img mklabel msdos
+          parted -s test.img mkpart primary fat32 1MiB 100%
+          ( sleep 8; printf 'sd\nusb\nuptime\n'; sleep 10 ) | \
+            timeout 40 qemu-system-aarch64 -M raspi3b -kernel kernel8.img \
+              -serial stdio -display none \
+              -drive file=test.img,if=sd,format=raw \
+              -device usb-net,netdev=n0 -netdev user,id=n0 > boot.log 2>&1 || true
           cat boot.log
-          grep -q "early boot reached C" boot.log
+          grep -q "early boot reached C"        boot.log
+          grep -q "MMU on, caches enabled"      boot.log
+          grep -q "interrupts and timer"        boot.log
+          grep -q "card: 64 MB"                 boot.log
+          grep -q "2 device(s)"                 boot.log
 
       - name: Build the card image
         run: |
