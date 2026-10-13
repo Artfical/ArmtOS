@@ -208,7 +208,8 @@ Enable **ICH AC97** in VirtualBox VM Settings → Audio → Audio Controller: IC
 | `ping6 <addr>` | ICMPv6 Echo Request/Reply (IPv6) |
 | `ip6addr` | Show the kernel's link-local IPv6 address |
 | `wget <url>` | Download a file over HTTP/1.0 (port 80) |
-| `wget [-k] https://<url>` | Download a file over HTTPS (TLS 1.2, port 443); `-k` skips certificate checks |
+| `wget [-k] https://<url>` | Download a file over HTTPS (TLS 1.2, port 443); follows redirects; `-k` skips certificate checks |
+| `ws <ws://host/path> [msg]` | Open a WebSocket, optionally send a message, and print what arrives |
 | `sctp_connect <ip> <port>` | Open an SCTP association (blocking handshake) |
 | `sctp_send <data>` | Send a DATA chunk on the current SCTP association |
 | `sctp_close` | Close the current SCTP association (SHUTDOWN sequence) |
@@ -313,7 +314,8 @@ The network stack is implemented from scratch in `kernel/net/`. It supports both
 | **DNS** | `dns.c` | A-record resolution |
 | **HTTP** | `http.c` | HTTP/1.0 client (`http_get`) |
 | **HTTPS** | `https.c` | HTTPS client over TLS 1.2 |
-| **TLS 1.2** | `tls.c` | TLS 1.2 client. Preferred suite `ECDHE-RSA-AES128-GCM-SHA256`: ephemeral X25519 key exchange (`x25519.c`), the server's RSA signature over it verified against the certificate, and AES-128-GCM record protection (`gcm.c`). `RSA-AES128-CBC-SHA256` is kept as a fallback for servers that offer nothing better. The chain is validated against the built-in CA store by default. |
+| **TLS 1.2** | `tls.c` | TLS 1.2 client with an ephemeral X25519 key exchange (`x25519.c`), so sessions keep forward secrecy. Suites offered, best first: `ECDHE-ECDSA-CHACHA20-POLY1305`, `ECDHE-RSA-CHACHA20-POLY1305` (`chacha20.c`), `ECDHE-ECDSA-AES128-GCM-SHA256`, `ECDHE-RSA-AES128-GCM-SHA256` (`gcm.c`), and `RSA-AES128-CBC-SHA256` as a last resort. Server signatures are checked as RSA or as ECDSA on P-256/P-384 (`p256.c`), and the chain is validated against the built-in CA store by default. |
+| **WebSocket** | `websocket.c` | RFC 6455 client over `ws://` and `wss://`: the Upgrade handshake (`sha1.c`), masked client frames, 16- and 64-bit lengths, and automatic replies to pings. Shell command `ws`. |
 | **SHA-256** | `sha256.c` | SHA-256 + HMAC-SHA256 (used by TLS PRF and record MAC) |
 | **AES-128** | `aes.c` | AES-128 encrypt/decrypt (used by TLS CBC mode) |
 | **SCTP** | `sctp.c` | Stream Control Transmission Protocol (RFC 4960) |
