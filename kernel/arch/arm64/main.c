@@ -2,6 +2,7 @@
 #include "uart.h"
 #include "mailbox.h"
 #include "gpio.h"
+#include "dwc2.h"
 #include "version.h"
 
 /* What the firmware hands over, printed so a serial console shows the port is alive and
@@ -113,6 +114,7 @@ void shell(void)
             uart_puts("read PIN        read a header pin\n");
             uart_puts("mem             how much memory the firmware gave the ARM side\n");
             uart_puts("board           which Raspberry Pi this is\n");
+            uart_puts("usb             bring the USB controller up and list what is attached\n");
             uart_puts("reboot          restart the board\n");
         } else if (str_eq(argv[0], "gpio") && argc >= 3) {
             int pin = parse_int(argv[1]), val = parse_int(argv[2]);
@@ -138,6 +140,23 @@ void shell(void)
         } else if (str_eq(argv[0], "board")) {
             uart_puts(bcm_model_name());
             uart_puts("\n");
+        } else if (str_eq(argv[0], "usb")) {
+            if (dwc2_init() != 0) { uart_puts("usb: controller did not start\n"); continue; }
+            int n = usb_enumerate();
+            uart_put_dec((uint64_t)n);
+            uart_puts(" device(s)\n");
+            for (int i = 0; i < n; i++) {
+                const usb_device_t *d = usb_device_get(i);
+                uart_puts("  addr ");
+                uart_put_dec(d->address);
+                uart_puts(" vendor ");
+                uart_put_hex(d->vendor);
+                uart_puts(" product ");
+                uart_put_hex(d->product);
+                uart_puts(" class ");
+                uart_put_hex(d->dev_class);
+                uart_puts("\n");
+            }
         } else if (str_eq(argv[0], "reboot")) {
             uart_puts("rebooting\n");
             /* the watchdog, set to the shortest timeout, is how a Pi restarts itself */
