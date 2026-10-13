@@ -4,6 +4,7 @@
 #include "gpio.h"
 #include "dwc2.h"
 #include "irq.h"
+#include "emmc.h"
 #include "version.h"
 
 /* What the firmware hands over, printed so a serial console shows the port is alive and
@@ -120,6 +121,7 @@ void shell(void)
             uart_puts("board           which Raspberry Pi this is\n");
             uart_puts("usb             bring the USB controller up and list what is attached\n");
             uart_puts("uptime          how long the board has been running\n");
+            uart_puts("sd              initialise the SD card and show its partitions\n");
             uart_puts("reboot          restart the board\n");
         } else if (str_eq(argv[0], "gpio") && argc >= 3) {
             int pin = parse_int(argv[1]), val = parse_int(argv[2]);
@@ -170,6 +172,30 @@ void shell(void)
             uart_puts(" s, ");
             uart_put_dec(timer_ticks());
             uart_puts(" ticks\n");
+        } else if (str_eq(argv[0], "sd")) {
+            if (emmc_init() != 0) { uart_puts("sd: no card\n"); continue; }
+            uart_puts("card: ");
+            uart_put_dec(emmc_blocks() / 2048);
+            uart_puts(" MB\n");
+
+            static uint8_t mbr[512] __attribute__((aligned(8)));
+            if (emmc_read(0, 1, mbr) < 0) { uart_puts("sd: read failed\n"); continue; }
+            if (mbr[510] != 0x55 || mbr[511] != 0xAA) { uart_puts("sd: no partition table\n"); continue; }
+            for (int pi = 0; pi < 4; pi++) {
+                const uint8_t *e = mbr + 446 + pi * 16;
+                uint32_t start = (uint32_t)e[8] | ((uint32_t)e[9] << 8) | ((uint32_t)e[10] << 16) | ((uint32_t)e[11] << 24);
+                uint32_t sectors = (uint32_t)e[12] | ((uint32_t)e[13] << 8) | ((uint32_t)e[14] << 16) | ((uint32_t)e[15] << 24);
+                if (e[4] == 0 || sectors == 0) continue;
+                uart_puts("  partition ");
+                uart_put_dec((uint64_t)pi + 1);
+                uart_puts(": type ");
+                uart_put_hex(e[4]);
+                uart_puts(" start ");
+                uart_put_dec(start);
+                uart_puts(" size ");
+                uart_put_dec(sectors / 2048);
+                uart_puts(" MB\n");
+            }
         } else if (str_eq(argv[0], "reboot")) {
             uart_puts("rebooting\n");
             /* the watchdog, set to the shortest timeout, is how a Pi restarts itself */

@@ -26,6 +26,7 @@ OBJS := $(ARCH_DIR)/boot.o \
         $(ARCH_DIR)/dwc2.o \
         $(ARCH_DIR)/exception.o \
         $(ARCH_DIR)/irq.o \
+        $(ARCH_DIR)/emmc.o \
         $(ARCH_DIR)/main.o
 
 DEPS := $(OBJS:.o=.d)
