@@ -7,6 +7,7 @@
 #include "sha512.h"
 #include "aes.h"
 #include "gcm.h"
+#include "chacha20.h"
 #include "x25519.h"
 #include "p256.h"
 #include "x509.h"
@@ -43,17 +44,28 @@
 #define TLS_CIPHER_RSA_AES128_CBC_SHA256  0x003C
 #define TLS_CIPHER_ECDHE_RSA_AES128_GCM   0xC02F
 #define TLS_CIPHER_ECDHE_ECDSA_AES128_GCM 0xC02B
+#define TLS_CIPHER_ECDHE_RSA_CHACHA20     0xCCA8
+#define TLS_CIPHER_ECDHE_ECDSA_CHACHA20   0xCCA9
 #define TLS_GROUP_X25519                  0x001D
 #define TLS_GROUP_SECP256R1               0x0017
 #define TLS_GCM_FIXED_IV   4              /* the salt half of the nonce, from the key block */
 #define TLS_GCM_EXPLICIT   8              /* the per-record half, sent in the clear */
 #define TLS_GCM_TAG       16
 
+static int suite_is_chacha(const tls_ctx_t *ctx)
+{
+    return ctx->suite == TLS_CIPHER_ECDHE_RSA_CHACHA20 || ctx->suite == TLS_CIPHER_ECDHE_ECDSA_CHACHA20;
+}
+/* every suite but the old RSA/CBC one is an AEAD over an ephemeral exchange */
 static int suite_is_gcm(const tls_ctx_t *ctx)
 {
-    return ctx->suite == TLS_CIPHER_ECDHE_RSA_AES128_GCM || ctx->suite == TLS_CIPHER_ECDHE_ECDSA_AES128_GCM;
+    return ctx->suite == TLS_CIPHER_ECDHE_RSA_AES128_GCM || ctx->suite == TLS_CIPHER_ECDHE_ECDSA_AES128_GCM ||
+           suite_is_chacha(ctx);
 }
-static int suite_is_ecdsa(const tls_ctx_t *ctx) { return ctx->suite == TLS_CIPHER_ECDHE_ECDSA_AES128_GCM; }
+static int suite_is_ecdsa(const tls_ctx_t *ctx)
+{
+    return ctx->suite == TLS_CIPHER_ECDHE_ECDSA_AES128_GCM || ctx->suite == TLS_CIPHER_ECDHE_ECDSA_CHACHA20;
+}
 
 /* All TLS randomness (client random, premaster secret, CBC IVs, RSA padding)
  * comes from the kernel CSPRNG. This used to be an LCG with the constant seed
@@ -78,6 +90,8 @@ static void tls_wipe_keys(tls_ctx_t *ctx)
     secure_zero(ctx->master, sizeof(ctx->master));
     secure_zero(ctx->client_write_key, sizeof(ctx->client_write_key));
     secure_zero(ctx->server_write_key, sizeof(ctx->server_write_key));
+    secure_zero(ctx->client_write_key32, sizeof(ctx->client_write_key32));
+    secure_zero(ctx->server_write_key32, sizeof(ctx->server_write_key32));
     secure_zero(ctx->client_write_iv, sizeof(ctx->client_write_iv));
     secure_zero(ctx->server_write_iv, sizeof(ctx->server_write_iv));
     secure_zero(ctx->client_mac, sizeof(ctx->client_mac));
@@ -283,16 +297,36 @@ static void gcm_aad(uint8_t aad[13], uint64_t seq, uint8_t type, int plain_len)
  * On the wire: explicit_nonce(8) || ciphertext || tag(16). The nonce is the 4-byte salt from
  * the key block followed by those 8 explicit bytes, for which the sequence number is used --
  * it never repeats for a given key, which is what GCM requires above all else. */
+/* ChaCha20-Poly1305 derives its nonce from the sequence number instead of sending one
+ * (RFC 7905): the 12-byte fixed IV is XORed with the sequence number, right-aligned. */
+static void chacha_nonce(uint8_t nonce[12], const uint8_t iv[12], uint64_t seq)
+{
+    memcpy(nonce, iv, 12);
+    for (int i = 0; i < 8; i++) nonce[11 - i] ^= (uint8_t)(seq >> (8 * i));
+}
+
 static int tls_gcm_encrypt_record(tls_ctx_t *ctx, uint8_t type,
                                   const uint8_t *data, int dlen,
                                   uint8_t *out, int out_cap, int *out_len)
 {
-    if (dlen < 0 || dlen > 16384 || out_cap < TLS_GCM_EXPLICIT + dlen + TLS_GCM_TAG) return -1;
+    if (dlen < 0 || dlen > 16384) return -1;
     uint8_t nonce[12], aad[13];
+    gcm_aad(aad, ctx->tx_seq, type, dlen);
+
+    if (suite_is_chacha(ctx)) {
+        if (out_cap < dlen + TLS_GCM_TAG) return -1;
+        chacha_nonce(nonce, ctx->client_write_iv, ctx->tx_seq);
+        chacha20poly1305_encrypt(ctx->client_write_key32, nonce, aad, (int)sizeof(aad),
+                                 data, dlen, out, out + dlen);
+        *out_len = dlen + TLS_GCM_TAG;
+        ctx->tx_seq++;
+        return 0;
+    }
+
+    if (out_cap < TLS_GCM_EXPLICIT + dlen + TLS_GCM_TAG) return -1;
     memcpy(nonce, ctx->client_write_iv, TLS_GCM_FIXED_IV);
     for (int i = 0; i < 8; i++) nonce[TLS_GCM_FIXED_IV + i] = (uint8_t)(ctx->tx_seq >> (56 - 8 * i));
     memcpy(out, nonce + TLS_GCM_FIXED_IV, TLS_GCM_EXPLICIT);
-    gcm_aad(aad, ctx->tx_seq, type, dlen);
     aes_gcm_encrypt(ctx->client_write_key, nonce, aad, sizeof(aad),
                     data, (uint32_t)dlen, out + TLS_GCM_EXPLICIT,
                     out + TLS_GCM_EXPLICIT + dlen);
@@ -305,6 +339,19 @@ static int tls_gcm_decrypt_record(tls_ctx_t *ctx, uint8_t type,
                                   const uint8_t *in, int in_len,
                                   uint8_t *out, int out_cap, int *out_len)
 {
+    if (suite_is_chacha(ctx)) {
+        if (in_len < TLS_GCM_TAG || in_len > TLS_REC_MAX) return -1;
+        int dlen = in_len - TLS_GCM_TAG;
+        if (dlen > out_cap || dlen > TLS_RX_BUF) return -1;
+        uint8_t nonce[12], aad[13];
+        chacha_nonce(nonce, ctx->server_write_iv, ctx->rx_seq);
+        gcm_aad(aad, ctx->rx_seq, type, dlen);
+        if (chacha20poly1305_decrypt(ctx->server_write_key32, nonce, aad, (int)sizeof(aad),
+                                     in, dlen, out, in + dlen) != 0) return -1;
+        *out_len = dlen;
+        ctx->rx_seq++;
+        return 0;
+    }
     if (in_len < TLS_GCM_EXPLICIT + TLS_GCM_TAG || in_len > TLS_REC_MAX) return -1;
     int dlen = in_len - TLS_GCM_EXPLICIT - TLS_GCM_TAG;
     if (dlen > out_cap || dlen > TLS_RX_BUF) return -1;
@@ -638,7 +685,11 @@ int tls_connect(tls_ctx_t *ctx, uint32_t ip, uint16_t port, const char *sni_host
     memcpy(ch+cpos, ctx->client_rand, 32); cpos += 32;
     ch[cpos++] = 0; /* session ID length = 0 */
     /* cipher suites, most preferred first */
-    ch[cpos++] = 0; ch[cpos++] = 6; /* 3 suites */
+    ch[cpos++] = 0; ch[cpos++] = 10; /* 5 suites */
+    ch[cpos++] = (TLS_CIPHER_ECDHE_ECDSA_CHACHA20>>8)&0xFF;
+    ch[cpos++] = TLS_CIPHER_ECDHE_ECDSA_CHACHA20 & 0xFF;
+    ch[cpos++] = (TLS_CIPHER_ECDHE_RSA_CHACHA20>>8)&0xFF;
+    ch[cpos++] = TLS_CIPHER_ECDHE_RSA_CHACHA20 & 0xFF;
     ch[cpos++] = (TLS_CIPHER_ECDHE_ECDSA_AES128_GCM>>8)&0xFF;
     ch[cpos++] = TLS_CIPHER_ECDHE_ECDSA_AES128_GCM & 0xFF;
     ch[cpos++] = (TLS_CIPHER_ECDHE_RSA_AES128_GCM>>8)&0xFF;
@@ -750,15 +801,18 @@ int tls_connect(tls_ctx_t *ctx, uint32_t ip, uint16_t port, const char *sni_host
         }
         {
             uint16_t chosen = u16be(hbody + 35 + sid_len);
-            if (chosen != TLS_CIPHER_ECDHE_ECDSA_AES128_GCM &&
+            if (chosen != TLS_CIPHER_ECDHE_ECDSA_CHACHA20 && chosen != TLS_CIPHER_ECDHE_RSA_CHACHA20 &&
+                chosen != TLS_CIPHER_ECDHE_ECDSA_AES128_GCM &&
                 chosen != TLS_CIPHER_ECDHE_RSA_AES128_GCM && chosen != TLS_CIPHER_RSA_AES128_CBC_SHA256) {
                 tls_log("server chose a cipher suite we did not offer");
                 goto fail;
             }
             ctx->suite = chosen;
-            tls_log(chosen == TLS_CIPHER_ECDHE_ECDSA_AES128_GCM ? "suite: ECDHE-ECDSA-AES128-GCM-SHA256"
-                    : chosen == TLS_CIPHER_ECDHE_RSA_AES128_GCM  ? "suite: ECDHE-RSA-AES128-GCM-SHA256"
-                                                                 : "suite: RSA-AES128-CBC-SHA256");
+            tls_log(chosen == TLS_CIPHER_ECDHE_ECDSA_CHACHA20   ? "suite: ECDHE-ECDSA-CHACHA20-POLY1305"
+                    : chosen == TLS_CIPHER_ECDHE_RSA_CHACHA20     ? "suite: ECDHE-RSA-CHACHA20-POLY1305"
+                    : chosen == TLS_CIPHER_ECDHE_ECDSA_AES128_GCM ? "suite: ECDHE-ECDSA-AES128-GCM-SHA256"
+                    : chosen == TLS_CIPHER_ECDHE_RSA_AES128_GCM   ? "suite: ECDHE-RSA-AES128-GCM-SHA256"
+                                                                  : "suite: RSA-AES128-CBC-SHA256");
         }
         if (hbody[37 + sid_len] != 0) {
             tls_log("server chose a compression method we did not offer");
@@ -1011,7 +1065,14 @@ int tls_connect(tls_ctx_t *ctx, uint32_t ip, uint16_t port, const char *sni_host
         memcpy(seed, ctx->server_rand, 32);
         memcpy(seed+32, ctx->client_rand, 32);
         uint8_t km[128];
-        if (suite_is_gcm(ctx)) {
+        if (suite_is_chacha(ctx)) {
+            /* ChaCha20-Poly1305: two 32-byte keys and two 12-byte nonces, no MAC keys (RFC 7905). */
+            tls_prf(ctx->master, 48, "key expansion", 13, seed, 64, km, 88);
+            memcpy(ctx->client_write_key32, km,      32);
+            memcpy(ctx->server_write_key32, km + 32, 32);
+            memcpy(ctx->client_write_iv,    km + 64, 12);
+            memcpy(ctx->server_write_iv,    km + 76, 12);
+        } else if (suite_is_gcm(ctx)) {
             /* GCM authenticates with the cipher itself, so there are no MAC keys: the block is
              * two 16-byte keys and two 4-byte nonce salts (RFC 5288). */
             tls_prf(ctx->master, 48, "key expansion", 13, seed, 64, km, 40);

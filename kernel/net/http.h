@@ -33,4 +33,8 @@ const char *http_strerror(int err);
  * (request splitting). */
 int http_build_request(char *req, int cap, const char *host, const char *path);
 
+/* The value of a response header (case-insensitive name, including the colon), or NULL.
+ * The returned pointer is inside `resp` and runs to the end of the line. */
+const char *http_header_value(const char *resp, int len, const char *name);
+
 #endif

@@ -57,6 +57,14 @@ static const uint8_t *hdr_value(const uint8_t *r, int hlen, const char *name)
     return 0;
 }
 
+const char *http_header_value(const char *resp, int len, const char *name)
+{
+    const uint8_t *r = (const uint8_t *)resp;
+    int he = hdr_end(r, len);
+    if (he < 0) he = len;                       /* headers still incomplete: search what there is */
+    return (const char *)hdr_value(r, he, name);
+}
+
 int http_response_check(const uint8_t *r, int *total)
 {
     int he = hdr_end(r, *total);

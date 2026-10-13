@@ -39,4 +39,20 @@ int xchacha20poly1305_decrypt(const uint8_t key[32], const uint8_t nonce[24],
                               const uint8_t *cipher, int cipher_len,
                               uint8_t *plain);
 
+/*
+ * ChaCha20-Poly1305 AEAD exactly as RFC 8439 defines it: a 12-byte nonce and additional
+ * authenticated data. This is the cipher most large sites prefer over AES-GCM, because it
+ * is fast without the AES instructions that older or smaller machines lack.
+ */
+void chacha20poly1305_encrypt(const uint8_t key[32], const uint8_t nonce[12],
+                              const uint8_t *aad, int aad_len,
+                              const uint8_t *plain, int plain_len,
+                              uint8_t *cipher, uint8_t tag[16]);
+
+/* 0 = the tag matched; -1 = forged or corrupt, and `plain` is cleared. */
+int  chacha20poly1305_decrypt(const uint8_t key[32], const uint8_t nonce[12],
+                              const uint8_t *aad, int aad_len,
+                              const uint8_t *cipher, int cipher_len,
+                              uint8_t *plain, const uint8_t tag[16]);
+
 #endif

@@ -11,6 +11,9 @@
 
 /* The cipher suites this client offers, best first. */
 #define TLS_SUITE_ECDHE_RSA_AES128_GCM_SHA256 0xC02F
+#define TLS_SUITE_ECDHE_ECDSA_AES128_GCM_SHA256 0xC02B
+#define TLS_SUITE_ECDHE_RSA_CHACHA20_SHA256     0xCCA8
+#define TLS_SUITE_ECDHE_ECDSA_CHACHA20_SHA256   0xCCA9
 #define TLS_SUITE_RSA_AES128_CBC_SHA256       0x003C
 
 typedef struct {
@@ -21,6 +24,8 @@ typedef struct {
     uint8_t  master[48];
     uint8_t  client_write_key[16];
     uint8_t  server_write_key[16];
+    uint8_t  client_write_key32[32];      /* ChaCha20's keys are twice as long */
+    uint8_t  server_write_key32[32];
     uint8_t  client_write_iv[16];         /* CBC: a whole block; GCM: the first 4 bytes are the fixed salt */
     uint8_t  server_write_iv[16];
     uint8_t  client_mac[32];

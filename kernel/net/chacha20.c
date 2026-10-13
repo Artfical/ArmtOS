@@ -1,5 +1,6 @@
 #include "chacha20.h"
 #include "string.h"
+#include "memory.h"
 
 /* -----------------------------------------------------------------------
  * ChaCha20 (RFC 7539)
@@ -279,5 +280,69 @@ int xchacha20poly1305_decrypt(const uint8_t key[32], const uint8_t nonce[24],
 
     /* Decrypt */
     chacha20_encrypt(subkey, 1, cn, cipher, plain, plain_len);
+    return 0;
+}
+
+/* ---- ChaCha20-Poly1305 AEAD (RFC 8439 section 2.8) ---- */
+
+/* The one-time Poly1305 key is the first half of the keystream block at counter 0; the
+ * data itself is encrypted from counter 1 on, so the two never overlap. */
+static void cc20_poly_key(const uint8_t key[32], const uint8_t nonce[12], uint8_t otk[32])
+{
+    uint8_t blk[64];
+    chacha20_block(key, 0, nonce, blk);
+    memcpy(otk, blk, 32);
+}
+
+/* The MAC covers the AAD and the ciphertext, each padded to a multiple of 16, followed by
+ * their two lengths -- the padding and the lengths are what stop one field being shifted
+ * into the other without changing the tag. */
+static void cc20_poly_tag(const uint8_t otk[32], const uint8_t *aad, int aad_len,
+                          const uint8_t *cipher, int cipher_len, uint8_t tag[16])
+{
+    int ap = (16 - (aad_len % 16)) % 16;
+    int cp = (16 - (cipher_len % 16)) % 16;
+    int total = aad_len + ap + cipher_len + cp + 16;
+    uint8_t *buf = (uint8_t *)malloc((size_t)total);
+    if (!buf) { memset(tag, 0, 16); return; }
+    int o = 0;
+    if (aad_len) { memcpy(buf + o, aad, (size_t)aad_len); o += aad_len; }
+    memset(buf + o, 0, (size_t)ap); o += ap;
+    if (cipher_len) { memcpy(buf + o, cipher, (size_t)cipher_len); o += cipher_len; }
+    memset(buf + o, 0, (size_t)cp); o += cp;
+    for (int i = 0; i < 8; i++) buf[o + i] = (uint8_t)((uint64_t)aad_len >> (8 * i));
+    for (int i = 0; i < 8; i++) buf[o + 8 + i] = (uint8_t)((uint64_t)cipher_len >> (8 * i));
+    o += 16;
+    poly1305_mac(otk, buf, o, tag);
+    memset(buf, 0, (size_t)total);
+    free(buf);
+}
+
+void chacha20poly1305_encrypt(const uint8_t key[32], const uint8_t nonce[12],
+                              const uint8_t *aad, int aad_len,
+                              const uint8_t *plain, int plain_len,
+                              uint8_t *cipher, uint8_t tag[16])
+{
+    uint8_t otk[32];
+    cc20_poly_key(key, nonce, otk);
+    if (plain_len) chacha20_encrypt(key, 1, nonce, plain, cipher, plain_len);
+    cc20_poly_tag(otk, aad, aad_len, cipher, plain_len, tag);
+    memset(otk, 0, sizeof(otk));
+}
+
+int chacha20poly1305_decrypt(const uint8_t key[32], const uint8_t nonce[12],
+                             const uint8_t *aad, int aad_len,
+                             const uint8_t *cipher, int cipher_len,
+                             uint8_t *plain, const uint8_t tag[16])
+{
+    uint8_t otk[32], want[16];
+    cc20_poly_key(key, nonce, otk);
+    cc20_poly_tag(otk, aad, aad_len, cipher, cipher_len, want);
+    /* Checked before anything is decrypted, and in constant time. */
+    uint8_t diff = 0;
+    for (int i = 0; i < 16; i++) diff |= (uint8_t)(want[i] ^ tag[i]);
+    if (diff) { memset(otk, 0, sizeof(otk)); if (cipher_len) memset(plain, 0, (size_t)cipher_len); return -1; }
+    if (cipher_len) chacha20_encrypt(key, 1, nonce, cipher, plain, cipher_len);
+    memset(otk, 0, sizeof(otk));
     return 0;
 }

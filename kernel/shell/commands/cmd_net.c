@@ -220,6 +220,16 @@ void cmd_wget(int argc, char **args)
         terminal_writestring("  -k   do not verify the HTTPS server certificate (unsafe)\n");
         return;
     }
+
+    /* Redirects are followed, because most sites answer the address a person actually types
+     * with one: http to https, bare domain to www. Without this they look simply broken. */
+    char urlbuf[512];
+    strncpy(urlbuf, url, sizeof(urlbuf) - 1);
+    urlbuf[sizeof(urlbuf) - 1] = 0;
+    int hops = 0;
+
+follow:;
+    url = urlbuf;
     int use_tls = 0;
     if (strncmp(url, "https://", 8) == 0) { use_tls = 1; url += 8; }
     else if (strncmp(url, "http://", 7) == 0) { url += 7; }
@@ -313,6 +323,47 @@ void cmd_wget(int argc, char **args)
     terminal_writestring("OK (");
     print_num(n);
     terminal_writestring(" bytes)\n");
+
+    {
+        /* 3xx with a Location header: go there instead, up to a few hops so a loop of
+         * redirects cannot run forever. */
+        int code = 0;
+        if (n > 12 && strncmp((const char *)resp, "HTTP/1.", 7) == 0)
+            code = (resp[9] - '0') * 100 + (resp[10] - '0') * 10 + (resp[11] - '0');
+        if (code >= 300 && code <= 399) {
+            const char *loc = http_header_value((const char *)resp, n, "location:");
+            if (loc && hops < 8) {
+                char next[512];
+                int ln = 0;
+                while (loc[ln] && loc[ln] != '\r' && loc[ln] != '\n' && ln < (int)sizeof(next) - 1) { next[ln] = loc[ln]; ln++; }
+                next[ln] = 0;
+                if (next[0] == '/') {                       /* same site, different path */
+                    int k = 0;
+                    const char *scheme = use_tls ? "https://" : "http://";
+                    while (*scheme && k < (int)sizeof(urlbuf) - 1) urlbuf[k++] = *scheme++;
+                    for (int h = 0; host[h] && k < (int)sizeof(urlbuf) - 1; h++) urlbuf[k++] = host[h];
+                    if (port != (use_tls ? 443 : 80) && k < (int)sizeof(urlbuf) - 8) {
+                        urlbuf[k++] = ':';
+                        char pb[8];
+                        int pl = 0, pv = port;
+                        while (pv) { pb[pl++] = (char)('0' + pv % 10); pv /= 10; }
+                        while (pl > 0 && k < (int)sizeof(urlbuf) - 1) urlbuf[k++] = pb[--pl];
+                    }
+                    for (int h = 0; next[h] && k < (int)sizeof(urlbuf) - 1; h++) urlbuf[k++] = next[h];
+                    urlbuf[k] = 0;
+                } else {
+                    strncpy(urlbuf, next, sizeof(urlbuf) - 1);
+                    urlbuf[sizeof(urlbuf) - 1] = 0;
+                }
+                terminal_writestring("-> ");
+                terminal_writestring(urlbuf);
+                terminal_writestring("\n");
+                free(resp);
+                hops++;
+                goto follow;
+            }
+        }
+    }
 
     int has_dot = 0;
     for (int k = 0; fname[k]; k++) if (fname[k] == '.') has_dot = 1;
