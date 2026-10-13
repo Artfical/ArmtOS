@@ -64,7 +64,8 @@ int mailbox_arm_memory(uint32_t *bytes)
 }
 
 int mailbox_framebuffer(uint32_t width, uint32_t height,
-                        uint64_t *fb_addr, uint32_t *pitch, uint32_t *fb_size)
+                        uint64_t *fb_addr, uint32_t *pitch, uint32_t *fb_size,
+                        uint32_t *pixel_order)
 {
     int i = 0;
     mbox_buf[i++] = 0;               /* size, filled in below */
@@ -73,7 +74,8 @@ int mailbox_framebuffer(uint32_t width, uint32_t height,
     mbox_buf[i++] = 0x00048004; mbox_buf[i++] = 8; mbox_buf[i++] = 8; mbox_buf[i++] = width; mbox_buf[i++] = height;
     mbox_buf[i++] = 0x00048009; mbox_buf[i++] = 8; mbox_buf[i++] = 8; mbox_buf[i++] = 0;     mbox_buf[i++] = 0;
     mbox_buf[i++] = 0x00048005; mbox_buf[i++] = 4; mbox_buf[i++] = 4; mbox_buf[i++] = 32;    /* 32 bits per pixel */
-    mbox_buf[i++] = 0x00048006; mbox_buf[i++] = 4; mbox_buf[i++] = 4; mbox_buf[i++] = 1;     /* RGB order */
+    int order_tag = i;
+    mbox_buf[i++] = 0x00048006; mbox_buf[i++] = 4; mbox_buf[i++] = 4; mbox_buf[i++] = 1;     /* ask for RGB */
     int fb_tag = i;
     mbox_buf[i++] = 0x00040001; mbox_buf[i++] = 8; mbox_buf[i++] = 8; mbox_buf[i++] = 4096;  mbox_buf[i++] = 0;
     int pitch_tag = i;
@@ -87,5 +89,6 @@ int mailbox_framebuffer(uint32_t width, uint32_t height,
     *fb_addr = addr & 0x3FFFFFFF;    /* back from a GPU bus address to an ARM one */
     *fb_size = mbox_buf[fb_tag + 4];
     *pitch = mbox_buf[pitch_tag + 3];
+    *pixel_order = mbox_buf[order_tag + 3];      /* what it actually set, not what we asked for */
     return 0;
 }

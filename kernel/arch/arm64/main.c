@@ -6,6 +6,7 @@
 #include "irq.h"
 #include "emmc.h"
 #include "mmu.h"
+#include "fb.h"
 #include "version.h"
 
 /* What the firmware hands over, printed so a serial console shows the port is alive and
@@ -125,6 +126,7 @@ void shell(void)
             uart_puts("usb             bring the USB controller up and list what is attached\n");
             uart_puts("uptime          how long the board has been running\n");
             uart_puts("sd              initialise the SD card and show its partitions\n");
+            uart_puts("fb              put something on the screen\n");
             uart_puts("reboot          restart the board\n");
         } else if (str_eq(argv[0], "gpio") && argc >= 3) {
             int pin = parse_int(argv[1]), val = parse_int(argv[2]);
@@ -199,6 +201,19 @@ void shell(void)
                 uart_put_dec(sectors / 2048);
                 uart_puts(" MB\n");
             }
+        } else if (str_eq(argv[0], "fb")) {
+            if (!fb_ready() && fb_init(640, 480) != 0) { uart_puts("fb: no display\n"); continue; }
+            fb_clear(0x00102040);
+            fb_rect(40, 40, fb_width() - 80, 60, 0x00204080);
+            fb_text(56, 64, "ArmtOS on the Raspberry Pi", 0x00FFFFFF);
+            fb_text(56, 120, bcm_model_name(), 0x0080FF80);
+            for (uint32_t i = 0; i < fb_width() - 80; i++)
+                fb_pixel(40 + i, 160, 0x00FF8040);
+            uart_puts("fb: ");
+            uart_put_dec(fb_width());
+            uart_puts("x");
+            uart_put_dec(fb_height());
+            uart_puts(" drawn\n");
         } else if (str_eq(argv[0], "reboot")) {
             uart_puts("rebooting\n");
             /* the watchdog, set to the shortest timeout, is how a Pi restarts itself */
