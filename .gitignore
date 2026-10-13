@@ -8,3 +8,8 @@ iso/
 tOS.img
 *.img
 lib/
+
+# ARM build output
+kernel8.img
+kernel8.elf
+*.d

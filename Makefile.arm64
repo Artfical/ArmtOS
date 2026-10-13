@@ -1,0 +1,47 @@
+# ArmtOS: the AArch64 build for the Raspberry Pi.
+#
+# The output is kernel8.img, the raw image the Pi's firmware loads at 0x80000. The x86
+# build (Makefile) is untouched and still works; the two share the portable sources and
+# differ in everything that talks to hardware.
+
+CROSS   ?= aarch64-linux-gnu-
+CC      := $(CROSS)gcc
+LD      := $(CROSS)ld
+OBJCOPY := $(CROSS)objcopy
+
+ARCH_DIR := kernel/arch/arm64
+
+CFLAGS := -ffreestanding -nostdlib -nostartfiles -nodefaultlibs -fno-builtin \
+          -fno-stack-protector -fno-pic -fno-pie -mgeneral-regs-only \
+          -O2 -Wall -Wextra -Werror -MMD -MP \
+          -I. -I$(ARCH_DIR) -Ikernel/core -Ikernel/lib
+
+ASFLAGS := $(CFLAGS)
+
+OBJS := $(ARCH_DIR)/boot.o \
+        $(ARCH_DIR)/bcm.o \
+        $(ARCH_DIR)/uart.o \
+        $(ARCH_DIR)/mailbox.o \
+        $(ARCH_DIR)/main.o
+
+DEPS := $(OBJS:.o=.d)
+
+all: kernel8.img
+
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+%.o: %.S
+	$(CC) $(ASFLAGS) -c $< -o $@
+
+kernel8.elf: $(OBJS) $(ARCH_DIR)/linker.ld
+	$(LD) -T $(ARCH_DIR)/linker.ld -o $@ $(OBJS)
+
+kernel8.img: kernel8.elf
+	$(OBJCOPY) -O binary $< $@
+
+clean:
+	rm -f $(OBJS) $(DEPS) kernel8.elf kernel8.img
+
+.PHONY: all clean
+-include $(DEPS)
