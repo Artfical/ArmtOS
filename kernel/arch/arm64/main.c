@@ -5,6 +5,7 @@
 #include "dwc2.h"
 #include "irq.h"
 #include "emmc.h"
+#include "mmu.h"
 #include "version.h"
 
 /* What the firmware hands over, printed so a serial console shows the port is alive and
@@ -40,6 +41,8 @@ void arm_main(void)
         uart_puts(" MB\n");
     }
 
+    mmu_init();
+    uart_puts("[OK] MMU on, caches enabled\n");
     irq_init();
     timer_init(100);                      /* a 100 Hz tick, as tOS uses on x86 */
     uart_puts("\n[OK] early boot reached C\n");
