@@ -11,7 +11,9 @@ void uart_init(void)
 {
     mmio_write(PL011_CR, 0);                       /* off while it is reconfigured */
 
-    /* GPIO 14 and 15 to their alternate function 0 (the UART) */
+    /* GPIO 14 and 15 to their alternate function 0 (the UART). A Pi 5 has no GPIO block
+     * here at all -- its header is behind RP1 -- and its debug UART needs no muxing. */
+    if (!bcm_has_legacy_gpio) goto configure_uart;
     uint32_t sel = mmio_read(GPFSEL1);
     sel &= ~((7u << 12) | (7u << 15));
     sel |=  ((4u << 12) | (4u << 15));
@@ -30,6 +32,7 @@ void uart_init(void)
         mmio_write(GPIO_PUP_PDN_CNTRL_REG0, p);
     }
 
+configure_uart:
     mmio_write(PL011_ICR, 0x7FF);                  /* clear every pending interrupt */
     /* 115200 baud from the 48 MHz reference clock the firmware sets up:
      * divisor = 48e6 / (16 * 115200) = 26.0417 -> integer 26, fraction 3 */

@@ -53,7 +53,7 @@ static void arm_deadline(uint64_t at)
 void irq_init(void)
 {
     arm_vectors_install();
-    use_gic = (bcm_periph_base == 0xFE000000);
+    use_gic = (bcm_generation >= 4);     /* the Pi 4 and 5 have a GIC; before that, Broadcom's own */
 
     if (use_gic) {
         /* GIC-400: enable the distributor and this CPU interface, and let every priority

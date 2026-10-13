@@ -10,6 +10,11 @@
  */
 
 extern uint64_t bcm_periph_base;
+/* The console is not always in the peripheral block: on a Pi 5 the legacy peripherals
+ * moved and the GPIO header is behind a separate chip, so the UART has its own base. */
+extern uint64_t bcm_uart_base;
+extern int      bcm_has_legacy_gpio;    /* 0 on a Pi 5, whose header is behind RP1 */
+extern int      bcm_generation;         /* 2, 3, 4 or 5 */
 
 void     bcm_detect(void);              /* works out which Pi this is */
 const char *bcm_model_name(void);
@@ -49,7 +54,7 @@ static inline void bcm_delay(int32_t count)
 #define AUX_MU_CNTL     (AUX_BASE + 0x60)
 #define AUX_MU_BAUD     (AUX_BASE + 0x68)
 
-#define PL011_BASE  (bcm_periph_base + 0x201000)
+#define PL011_BASE  bcm_uart_base
 #define PL011_DR    (PL011_BASE + 0x00)
 #define PL011_FR    (PL011_BASE + 0x18)
 #define PL011_IBRD  (PL011_BASE + 0x24)

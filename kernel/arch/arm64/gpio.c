@@ -6,7 +6,7 @@
 
 void gpio_set_function(int pin, int function)
 {
-    if (pin < 0 || pin > 53) return;
+    if (pin < 0 || pin > 53 || !bcm_has_legacy_gpio) return;
     uint64_t reg = GPIO_BASE + (uint64_t)(pin / 10) * 4;
     int shift = (pin % 10) * 3;
     uint32_t v = mmio_read(reg);
@@ -17,9 +17,9 @@ void gpio_set_function(int pin, int function)
 
 void gpio_set_pull(int pin, int pull)
 {
-    if (pin < 0 || pin > 53) return;
+    if (pin < 0 || pin > 53 || !bcm_has_legacy_gpio) return;
 
-    if (bcm_periph_base == 0xFE000000) {
+    if (bcm_generation == 4) {
         /* The Pi 4 replaced the old clocked sequence with a plain register: 0 none,
          * 1 pull-up, 2 pull-down -- note the order is not the same as the old one. */
         uint64_t reg = GPIO_PUP_PDN_CNTRL_REG0 + (uint64_t)(pin / 16) * 4;
@@ -43,7 +43,7 @@ void gpio_set_pull(int pin, int pull)
 
 void gpio_write(int pin, int high)
 {
-    if (pin < 0 || pin > 53) return;
+    if (pin < 0 || pin > 53 || !bcm_has_legacy_gpio) return;
     /* Separate set and clear registers, so changing one pin never disturbs another. */
     uint64_t reg = (high ? GPSET0 : GPCLR0) + (uint64_t)(pin / 32) * 4;
     mmio_write(reg, 1u << (pin % 32));
@@ -51,7 +51,7 @@ void gpio_write(int pin, int high)
 
 int gpio_read(int pin)
 {
-    if (pin < 0 || pin > 53) return -1;
+    if (pin < 0 || pin > 53 || !bcm_has_legacy_gpio) return -1;
     uint64_t lev = GPIO_BASE + 0x34 + (uint64_t)(pin / 32) * 4;
     return (mmio_read(lev) >> (pin % 32)) & 1;
 }
