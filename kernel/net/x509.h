@@ -44,10 +44,15 @@ typedef struct {
     const uint8_t *subject; uint32_t subject_len;
     const uint8_t *sig;     uint32_t sig_len;       /* signature value, without the unused-bits byte */
     int            sig_hash;                        /* RSA_HASH_*; 0 when sig_alg is not usable */
+    int            sig_is_ecdsa;                    /* the signature is ECDSA (two INTEGERs), not PKCS#1 */
     int            sig_alg_status;                  /* X509_OK, X509_ERR_SIG_ALG or X509_ERR_WEAK_SIG_ALG */
     const uint8_t *n;       uint32_t n_len;         /* RSA modulus, leading zeros stripped */
     uint32_t       e;
     int            has_rsa_key;
+    /* An EC key on P-256, the other kind of certificate in common use. `ec_point` is the
+     * uncompressed 65-byte form; curves other than P-256 leave has_ec_key clear. */
+    int            has_ec_key;
+    uint8_t        ec_point[65];
     x509_time_t    not_before, not_after;
     int            has_bc, is_ca, path_len;         /* basicConstraints; path_len -1 = unlimited */
     int            has_ku;  uint16_t ku;            /* keyUsage: bit i set = named bit i of the BIT STRING (see X509_KU_*) */

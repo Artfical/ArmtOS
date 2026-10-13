@@ -1,5 +1,6 @@
 #include "x509.h"
 #include "rsa.h"
+#include "p256.h"
 #include "sha256.h"
 #include "sha512.h"
 #include "string.h"
@@ -130,12 +131,13 @@ static int parse_time(uint8_t tag, const uint8_t *v, uint32_t l, x509_time_t *ou
 
 /* --------------------------------------------------- field extraction --- */
 
-static int parse_sig_alg(const uint8_t *alg_val, uint32_t alg_len, int *hash, int *status)
+static int parse_sig_alg(const uint8_t *alg_val, uint32_t alg_len, int *hash, int *status, int *is_ecdsa)
 {
     der_it it = der_sub(alg_val, alg_len);
     const uint8_t *oid; uint32_t ol;
+    *is_ecdsa = 0;
     if (der_expect(&it, 0x06, &oid, &ol, 0) != 0) return -1;
-    /* parameters: absent or NULL for the PKCS#1 v1.5 family */
+    /* parameters: absent or NULL for the PKCS#1 v1.5 family; an ECDSA algorithm omits them */
     if (!der_done(&it)) {
         const uint8_t *pv; uint32_t pl;
         if (der_expect(&it, 0x05, &pv, &pl, 0) != 0 || pl != 0 || !der_done(&it)) {
@@ -151,8 +153,11 @@ static int parse_sig_alg(const uint8_t *alg_val, uint32_t alg_len, int *hash, in
              OID_IS(oid, ol, 0x2A,0x86,0x48,0x86,0xF7,0x0D,0x01,0x01,0x04) ||   /* md5WithRSA */
              OID_IS(oid, ol, 0x2A,0x86,0x48,0x86,0xF7,0x0D,0x01,0x01,0x02))     /* md2WithRSA */
         *status = X509_ERR_WEAK_SIG_ALG;
+    else if (OID_IS(oid, ol, 0x2A,0x86,0x48,0xCE,0x3D,0x04,0x03,0x02)) { *hash = RSA_HASH_SHA256; *status = X509_OK; *is_ecdsa = 1; }
+    else if (OID_IS(oid, ol, 0x2A,0x86,0x48,0xCE,0x3D,0x04,0x03,0x03)) { *hash = RSA_HASH_SHA384; *status = X509_OK; *is_ecdsa = 1; }
+    else if (OID_IS(oid, ol, 0x2A,0x86,0x48,0xCE,0x3D,0x04,0x03,0x04)) { *hash = RSA_HASH_SHA512; *status = X509_OK; *is_ecdsa = 1; }
     else
-        *status = X509_ERR_SIG_ALG;                       /* PSS, ECDSA, ... */
+        *status = X509_ERR_SIG_ALG;                       /* PSS, ... */
     return 0;
 }
 
@@ -169,6 +174,19 @@ static int parse_spki(const uint8_t *v, uint32_t l, x509_cert_t *c)
     const uint8_t *oid; uint32_t ol;
     if (der_expect(&ai, 0x06, &oid, &ol, 0) != 0) return -1;
     c->has_rsa_key = 0;
+    c->has_ec_key = 0;
+    /* id-ecPublicKey (1.2.840.10045.2.1) with the prime256v1 parameters: the key is the
+     * uncompressed point in the BIT STRING. Any other curve is left unusable rather than
+     * guessed at. */
+    if (OID_IS(oid, ol, 0x2A,0x86,0x48,0xCE,0x3D,0x02,0x01)) {
+        const uint8_t *cv; uint32_t cl;
+        if (der_expect(&ai, 0x06, &cv, &cl, 0) != 0 || !der_done(&ai)) return 0;
+        if (!OID_IS(cv, cl, 0x2A,0x86,0x48,0xCE,0x3D,0x03,0x01,0x07)) return 0;     /* not P-256 */
+        if (kv[0] != 0 || kl != 1 + 65 || kv[1] != 4) return 0;                      /* unused bits / not uncompressed */
+        memcpy(c->ec_point, kv + 1, 65);
+        c->has_ec_key = 1;
+        return 0;
+    }
     if (!OID_IS(oid, ol, 0x2A,0x86,0x48,0x86,0xF7,0x0D,0x01,0x01,0x01)) return 0;   /* not RSA: fine until used */
     if (kv[0] != 0) return -1;                                                        /* unused bits */
 
@@ -300,7 +318,7 @@ int x509_parse(const uint8_t *der, uint32_t len, x509_cert_t *c)
     const uint8_t *av, *astart; uint32_t al;
     if (der_expect(&cert, 0x30, &av, &al, &astart) != 0) return X509_ERR_MALFORMED;
     const uint8_t *outer_alg = astart; uint32_t outer_alg_len = (uint32_t)(cert.p - astart);
-    if (parse_sig_alg(av, al, &c->sig_hash, &c->sig_alg_status) != 0) return X509_ERR_MALFORMED;
+    if (parse_sig_alg(av, al, &c->sig_hash, &c->sig_alg_status, &c->sig_is_ecdsa) != 0) return X509_ERR_MALFORMED;
 
     const uint8_t *sgv; uint32_t sgl;
     if (der_expect(&cert, 0x03, &sgv, &sgl, 0) != 0 || !der_done(&cert) || sgl < 2 || sgv[0] != 0) return X509_ERR_MALFORMED;
@@ -454,17 +472,46 @@ int x509_host_matches(const x509_cert_t *c, const char *host)
 
 /* ---------------------------------------------------------- signature --- */
 
+/* An ECDSA signature is DER: SEQUENCE { INTEGER r, INTEGER s }, each of which may carry a
+ * leading zero (or be short) and has to be laid out as a fixed 32-byte value. */
+static int ecdsa_sig_split(const uint8_t *sig, uint32_t len, uint8_t r[32], uint8_t s[32])
+{
+    der_it it = der_sub(sig, len);
+    const uint8_t *sv; uint32_t sl;
+    if (der_expect(&it, 0x30, &sv, &sl, 0) != 0 || !der_done(&it)) return -1;
+    der_it si = der_sub(sv, sl);
+    const uint8_t *rv, *svv; uint32_t rl, svl;
+    if (der_expect(&si, 0x02, &rv, &rl, 0) != 0 || der_expect(&si, 0x02, &svv, &svl, 0) != 0 || !der_done(&si)) return -1;
+    if (rl == 0 || svl == 0 || (rv[0] & 0x80) || (svv[0] & 0x80)) return -1;   /* negative */
+    while (rl > 1 && rv[0] == 0) { rv++; rl--; }
+    while (svl > 1 && svv[0] == 0) { svv++; svl--; }
+    if (rl > 32 || svl > 32) return -1;
+    memset(r, 0, 32); memcpy(r + (32 - rl), rv, rl);
+    memset(s, 0, 32); memcpy(s + (32 - svl), svv, svl);
+    return 0;
+}
+
 int x509_check_signature(const x509_cert_t *c, const x509_cert_t *issuer)
 {
     if (c->sig_alg_status != X509_OK) return c->sig_alg_status;
-    if (!issuer->has_rsa_key) return X509_ERR_UNSUPPORTED_KEY;
     uint8_t digest[64];
+    int dlen;
     switch (c->sig_hash) {
-    case RSA_HASH_SHA256: sha256_hash(c->tbs, c->tbs_len, digest); break;
-    case RSA_HASH_SHA384: sha384_hash(c->tbs, c->tbs_len, digest); break;
-    case RSA_HASH_SHA512: sha512_hash(c->tbs, c->tbs_len, digest); break;
+    case RSA_HASH_SHA256: sha256_hash(c->tbs, c->tbs_len, digest); dlen = 32; break;
+    case RSA_HASH_SHA384: sha384_hash(c->tbs, c->tbs_len, digest); dlen = 48; break;
+    case RSA_HASH_SHA512: sha512_hash(c->tbs, c->tbs_len, digest); dlen = 64; break;
     default: return X509_ERR_SIG_ALG;
     }
+    if (c->sig_is_ecdsa) {
+        /* The signature algorithm names the key it must have been made with: an ECDSA
+         * signature can only be checked against the issuer's EC key. */
+        if (!issuer->has_ec_key) return X509_ERR_UNSUPPORTED_KEY;
+        uint8_t r[32], sg[32];
+        if (ecdsa_sig_split(c->sig, c->sig_len, r, sg) != 0) return X509_ERR_BAD_SIGNATURE;
+        return p256_ecdsa_verify(issuer->ec_point, r, sg, digest, dlen) == 0
+               ? X509_OK : X509_ERR_BAD_SIGNATURE;
+    }
+    if (!issuer->has_rsa_key) return X509_ERR_UNSUPPORTED_KEY;
     if (c->sig_len != issuer->n_len) return X509_ERR_BAD_SIGNATURE;
     return rsa_pkcs1_verify(issuer->n, issuer->n_len, issuer->e, c->sig_hash, digest, c->sig, c->sig_len) == 0
            ? X509_OK : X509_ERR_BAD_SIGNATURE;

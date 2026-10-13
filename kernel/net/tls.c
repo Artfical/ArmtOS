@@ -8,6 +8,7 @@
 #include "aes.h"
 #include "gcm.h"
 #include "x25519.h"
+#include "p256.h"
 #include "x509.h"
 #include "rsa.h"
 #include "cmos.h"
@@ -41,12 +42,18 @@
 #define TLS_HT_FINISHED        20
 #define TLS_CIPHER_RSA_AES128_CBC_SHA256  0x003C
 #define TLS_CIPHER_ECDHE_RSA_AES128_GCM   0xC02F
+#define TLS_CIPHER_ECDHE_ECDSA_AES128_GCM 0xC02B
 #define TLS_GROUP_X25519                  0x001D
+#define TLS_GROUP_SECP256R1               0x0017
 #define TLS_GCM_FIXED_IV   4              /* the salt half of the nonce, from the key block */
 #define TLS_GCM_EXPLICIT   8              /* the per-record half, sent in the clear */
 #define TLS_GCM_TAG       16
 
-static int suite_is_gcm(const tls_ctx_t *ctx) { return ctx->suite == TLS_CIPHER_ECDHE_RSA_AES128_GCM; }
+static int suite_is_gcm(const tls_ctx_t *ctx)
+{
+    return ctx->suite == TLS_CIPHER_ECDHE_RSA_AES128_GCM || ctx->suite == TLS_CIPHER_ECDHE_ECDSA_AES128_GCM;
+}
+static int suite_is_ecdsa(const tls_ctx_t *ctx) { return ctx->suite == TLS_CIPHER_ECDHE_ECDSA_AES128_GCM; }
 
 /* All TLS randomness (client random, premaster secret, CBC IVs, RSA padding)
  * comes from the kernel CSPRNG. This used to be an LCG with the constant seed
@@ -87,6 +94,35 @@ static int ct_equal(const uint8_t *a, const uint8_t *b, int n)
     return d == 0;
 }
 
+
+/* A TLS ECDSA signature is the same DER SEQUENCE { INTEGER r, INTEGER s } a certificate
+ * carries; both integers are laid out as fixed 32-byte values for the curve code. */
+static int ecdsa_sig_to_rs(const uint8_t *sig, uint32_t len, uint8_t r[32], uint8_t s[32])
+{
+    if (len < 8 || sig[0] != 0x30) return -1;
+    uint32_t off = 2, seq_len = sig[1];
+    if (seq_len & 0x80) {                       /* long form: one length byte is all a P-256 signature needs */
+        if ((seq_len & 0x7F) != 1 || len < 3) return -1;
+        seq_len = sig[2];
+        off = 3;
+    }
+    if (off + seq_len != len) return -1;
+    uint8_t *dst[2] = { r, s };
+    for (int i = 0; i < 2; i++) {
+        if (off + 2 > len || sig[off] != 0x02) return -1;
+        uint32_t il = sig[off + 1];
+        off += 2;
+        if (il == 0 || il > 33 || off + il > len) return -1;
+        const uint8_t *iv = sig + off;
+        off += il;
+        if (iv[0] & 0x80) return -1;            /* negative */
+        while (il > 1 && iv[0] == 0) { iv++; il--; }
+        if (il > 32) return -1;
+        memset(dst[i], 0, 32);
+        memcpy(dst[i] + (32 - il), iv, il);
+    }
+    return off == len ? 0 : -1;
+}
 
 static uint16_t u16be(const uint8_t *p) { return ((uint16_t)p[0]<<8)|p[1]; }
 static uint32_t u24be(const uint8_t *p) { return ((uint32_t)p[0]<<16)|((uint32_t)p[1]<<8)|p[2]; }
@@ -602,7 +638,9 @@ int tls_connect(tls_ctx_t *ctx, uint32_t ip, uint16_t port, const char *sni_host
     memcpy(ch+cpos, ctx->client_rand, 32); cpos += 32;
     ch[cpos++] = 0; /* session ID length = 0 */
     /* cipher suites, most preferred first */
-    ch[cpos++] = 0; ch[cpos++] = 4; /* 2 suites */
+    ch[cpos++] = 0; ch[cpos++] = 6; /* 3 suites */
+    ch[cpos++] = (TLS_CIPHER_ECDHE_ECDSA_AES128_GCM>>8)&0xFF;
+    ch[cpos++] = TLS_CIPHER_ECDHE_ECDSA_AES128_GCM & 0xFF;
     ch[cpos++] = (TLS_CIPHER_ECDHE_RSA_AES128_GCM>>8)&0xFF;
     ch[cpos++] = TLS_CIPHER_ECDHE_RSA_AES128_GCM & 0xFF;
     ch[cpos++] = (TLS_CIPHER_RSA_AES128_CBC_SHA256>>8)&0xFF;
@@ -641,19 +679,26 @@ int tls_connect(tls_ctx_t *ctx, uint32_t ip, uint16_t port, const char *sni_host
          * handshake rather than guess. Advertise the one algorithm
          * this client actually verifies against: rsa_pkcs1_sha256. */
         ch[cpos++] = 0x00; ch[cpos++] = 0x0d; /* extension type: signature_algorithms */
-        ch[cpos++] = 0x00; ch[cpos++] = 0x08; /* extension_data length */
-        ch[cpos++] = 0x00; ch[cpos++] = 0x06; /* supported_signature_algorithms length */
+        ch[cpos++] = 0x00; ch[cpos++] = 0x0E; /* extension_data length */
+        ch[cpos++] = 0x00; ch[cpos++] = 0x0C; /* supported_signature_algorithms length */
+        ch[cpos++] = 0x04; ch[cpos++] = 0x03; /* sha256, ecdsa (P-256 certificates) */
+        ch[cpos++] = 0x05; ch[cpos++] = 0x03; /* sha384, ecdsa */
+        ch[cpos++] = 0x06; ch[cpos++] = 0x03; /* sha512, ecdsa */
         ch[cpos++] = 0x04; ch[cpos++] = 0x01; /* sha256, rsa */
         ch[cpos++] = 0x05; ch[cpos++] = 0x01; /* sha384, rsa */
         ch[cpos++] = 0x06; ch[cpos++] = 0x01; /* sha512, rsa -- the server signs its key exchange
-                                               * with one of these, and all three are verified here */
+                                               * with one of these, and all six are verified here */
 
         /* supported_groups (RFC 8422 5.1.1): which curves we can do an ephemeral exchange on.
          * X25519 is the one implemented, and the one modern servers prefer anyway. */
         ch[cpos++] = 0x00; ch[cpos++] = 0x0a; /* extension type: supported_groups */
-        ch[cpos++] = 0x00; ch[cpos++] = 0x04; /* extension_data length */
-        ch[cpos++] = 0x00; ch[cpos++] = 0x02; /* list length */
+        ch[cpos++] = 0x00; ch[cpos++] = 0x06; /* extension_data length */
+        ch[cpos++] = 0x00; ch[cpos++] = 0x04; /* list length */
         ch[cpos++] = (TLS_GROUP_X25519 >> 8) & 0xFF; ch[cpos++] = TLS_GROUP_X25519 & 0xFF;
+        /* secp256r1 is listed as well because RFC 4492's curve list also says which curves a
+         * *certificate* key may use: without it a server with an ECDSA certificate decides it
+         * has nothing it can offer us. X25519 stays first, so that is what the key exchange uses. */
+        ch[cpos++] = (TLS_GROUP_SECP256R1 >> 8) & 0xFF; ch[cpos++] = TLS_GROUP_SECP256R1 & 0xFF;
 
         /* ec_point_formats: uncompressed only. X25519 has no point format of its own, but
          * servers still expect the extension when a curve is offered. */
@@ -705,13 +750,15 @@ int tls_connect(tls_ctx_t *ctx, uint32_t ip, uint16_t port, const char *sni_host
         }
         {
             uint16_t chosen = u16be(hbody + 35 + sid_len);
-            if (chosen != TLS_CIPHER_ECDHE_RSA_AES128_GCM && chosen != TLS_CIPHER_RSA_AES128_CBC_SHA256) {
+            if (chosen != TLS_CIPHER_ECDHE_ECDSA_AES128_GCM &&
+                chosen != TLS_CIPHER_ECDHE_RSA_AES128_GCM && chosen != TLS_CIPHER_RSA_AES128_CBC_SHA256) {
                 tls_log("server chose a cipher suite we did not offer");
                 goto fail;
             }
             ctx->suite = chosen;
-            tls_log(chosen == TLS_CIPHER_ECDHE_RSA_AES128_GCM
-                    ? "suite: ECDHE-RSA-AES128-GCM-SHA256" : "suite: RSA-AES128-CBC-SHA256");
+            tls_log(chosen == TLS_CIPHER_ECDHE_ECDSA_AES128_GCM ? "suite: ECDHE-ECDSA-AES128-GCM-SHA256"
+                    : chosen == TLS_CIPHER_ECDHE_RSA_AES128_GCM  ? "suite: ECDHE-RSA-AES128-GCM-SHA256"
+                                                                 : "suite: RSA-AES128-CBC-SHA256");
         }
         if (hbody[37 + sid_len] != 0) {
             tls_log("server chose a compression method we did not offer");
@@ -731,6 +778,7 @@ int tls_connect(tls_ctx_t *ctx, uint32_t ip, uint16_t port, const char *sni_host
     uint8_t rsa_mod[RSA_MAX_BYTES];
     int rsa_mod_len = 0;
     uint32_t rsa_exp = 65537;
+    uint8_t ec_pub[65];
     int found_key = 0;
     int got_cert = 0;
     int got_done = 0;
@@ -792,16 +840,23 @@ int tls_connect(tls_ctx_t *ctx, uint32_t ip, uint16_t port, const char *sni_host
                 xr = x509_verify_chain(chain, nc, sni_host, tls_now(), ku_flag, &leaf);
             else
                 xr = x509_parse(chain[0].der, chain[0].len, &leaf);
-            if (xr == X509_OK && !leaf.has_rsa_key) xr = X509_ERR_UNSUPPORTED_KEY;
+            /* The suite says which kind of key the server must have signed with. */
+            if (xr == X509_OK) {
+                if (suite_is_ecdsa(ctx)) { if (!leaf.has_ec_key) xr = X509_ERR_UNSUPPORTED_KEY; }
+                else if (!leaf.has_rsa_key) xr = X509_ERR_UNSUPPORTED_KEY;
+            }
             if (xr != X509_OK) {
                 g_cert_err = xr;
                 tls_log(x509_strerror(xr));
                 rc = TLS_ERR_CERT;
                 goto fail;
             }
-            memcpy(rsa_mod, leaf.n, leaf.n_len);
-            rsa_mod_len = (int)leaf.n_len;
-            rsa_exp = leaf.e;
+            if (leaf.has_rsa_key) {
+                memcpy(rsa_mod, leaf.n, leaf.n_len);
+                rsa_mod_len = (int)leaf.n_len;
+                rsa_exp = leaf.e;
+            }
+            if (leaf.has_ec_key) memcpy(ec_pub, leaf.ec_point, sizeof(ec_pub));
             found_key = 1;
         } else if (ht == TLS_HT_SERVER_DONE) {
             if (!got_cert) { tls_log("ServerHelloDone before the Certificate"); goto fail; }
@@ -834,25 +889,35 @@ int tls_connect(tls_ctx_t *ctx, uint32_t ip, uint16_t port, const char *sni_host
                 tls_log("ServerKeyExchange signature length does not match the message");
                 goto fail;
             }
-            if (sig_alg[1] != 1) {                      /* signature algorithm: 1 = RSA (PKCS#1 v1.5) */
+            /* signature algorithm byte: 1 = RSA (PKCS#1 v1.5), 3 = ECDSA */
+            if ((sig_alg[1] != 1 && sig_alg[1] != 3) ||
+                (sig_alg[1] == 3) != (suite_is_ecdsa(ctx) != 0)) {
                 tls_log("server signed its key exchange with an algorithm we cannot verify");
                 goto fail;
             }
             /* The signature is over client_random || server_random || the params above, which
              * is what binds this ephemeral key to the certificate we just authenticated --
              * without checking it, anyone in the path could substitute their own key. */
-            int hash_id;
+            int hash_id, digest_len;
             uint8_t digest[64];
             uint8_t signed_data[32 + 32 + 4 + X25519_LEN];
             memcpy(signed_data, ctx->client_rand, 32);
             memcpy(signed_data + 32, ctx->server_rand, 32);
             memcpy(signed_data + 64, hbody, params_len);
             uint32_t signed_len = 64 + params_len;
-            if (sig_alg[0] == 4)      { hash_id = RSA_HASH_SHA256; sha256_hash(signed_data, signed_len, digest); }
-            else if (sig_alg[0] == 5) { hash_id = RSA_HASH_SHA384; sha384_hash(signed_data, signed_len, digest); }
-            else if (sig_alg[0] == 6) { hash_id = RSA_HASH_SHA512; sha512_hash(signed_data, signed_len, digest); }
+            if (sig_alg[0] == 4)      { hash_id = RSA_HASH_SHA256; digest_len = 32; sha256_hash(signed_data, signed_len, digest); }
+            else if (sig_alg[0] == 5) { hash_id = RSA_HASH_SHA384; digest_len = 48; sha384_hash(signed_data, signed_len, digest); }
+            else if (sig_alg[0] == 6) { hash_id = RSA_HASH_SHA512; digest_len = 64; sha512_hash(signed_data, signed_len, digest); }
             else { tls_log("server used a hash we did not offer for its key exchange"); goto fail; }
-            if (rsa_pkcs1_verify(rsa_mod, rsa_mod_len, rsa_exp, hash_id, digest, sig, (int)sig_len) != 0) {
+            int sig_ok;
+            if (sig_alg[1] == 3) {
+                uint8_t sr[32], ss[32];
+                sig_ok = ecdsa_sig_to_rs(sig, sig_len, sr, ss) == 0 &&
+                         p256_ecdsa_verify(ec_pub, sr, ss, digest, digest_len) == 0;
+            } else {
+                sig_ok = rsa_pkcs1_verify(rsa_mod, rsa_mod_len, rsa_exp, hash_id, digest, sig, (int)sig_len) == 0;
+            }
+            if (!sig_ok) {
                 tls_log("ServerKeyExchange signature is not valid for this certificate");
                 goto fail;
             }
