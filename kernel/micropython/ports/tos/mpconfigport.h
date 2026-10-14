@@ -43,8 +43,18 @@
 #define MICROPY_PY_COLLECTIONS      1
 #define MICROPY_PY_MICROPYTHON_MEM_INFO 1
 
+/* The interpreter's integer must be the size of a pointer, which differs between the two
+ * builds: 32 bits on the x86 kernel, 64 on the AArch64 one. */
+#if defined(__aarch64__)
+typedef long mp_int_t;
+#else
 typedef int mp_int_t;
+#endif
+#if defined(__aarch64__)
+typedef unsigned long mp_uint_t;
+#else
 typedef unsigned int mp_uint_t;
+#endif
 typedef long mp_off_t;
 
 #define MP_STATE_PORT MP_STATE_VM

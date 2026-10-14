@@ -11,5 +11,7 @@ lib/
 
 # ARM build output
 kernel8.img
+*.arm.o
+*.arm.d
 kernel8.elf
 *.d

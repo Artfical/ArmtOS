@@ -14,43 +14,76 @@ ARCH_DIR := kernel/arch/arm64
 CFLAGS := -ffreestanding -nostdlib -nostartfiles -nodefaultlibs -fno-builtin \
           -fno-stack-protector -fno-pic -fno-pie -mgeneral-regs-only \
           -O2 -Wall -Wextra -Werror -MMD -MP \
-          -I. -I$(ARCH_DIR) -Ikernel/core -Ikernel/lib
+          -I. -I$(ARCH_DIR) -Ikernel/core -Ikernel/lib -Ikernel/micropython/ports/armtos
+
+# MicroPython is third-party code and is not held to this build's warning settings; it also
+# needs its own include paths and the port glue written for this architecture.
+# -mgeneral-regs-only is left off here on purpose: MicroPython's object model names
+# floating-point types even with float support disabled, and the kernel enables FP access
+# at boot for exactly this reason.
+MPFLAGS := -ffreestanding -nostdlib -nostartfiles -nodefaultlibs -fno-builtin \
+           -fno-stack-protector -fno-pic -fno-pie -O2 -MMD -MP \
+           -I. -I$(ARCH_DIR) -Ikernel/micropython -Ikernel/micropython/ports/tos \
+           -Ikernel/micropython/ports/armtos -Ikernel/micropython/genhdr
 
 ASFLAGS := $(CFLAGS)
 
-OBJS := $(ARCH_DIR)/boot.o \
-        $(ARCH_DIR)/bcm.o \
-        $(ARCH_DIR)/uart.o \
-        $(ARCH_DIR)/mailbox.o \
-        $(ARCH_DIR)/gpio.o \
-        $(ARCH_DIR)/dwc2.o \
-        $(ARCH_DIR)/exception.o \
-        $(ARCH_DIR)/irq.o \
-        $(ARCH_DIR)/emmc.o \
-        $(ARCH_DIR)/mmu.o \
-        $(ARCH_DIR)/fb.o \
-        $(ARCH_DIR)/pwm.o \
-        $(ARCH_DIR)/i2c.o \
-        $(ARCH_DIR)/spi.o \
-        $(ARCH_DIR)/hwapi.o \
-        $(ARCH_DIR)/syscall_arm.o \
-        $(ARCH_DIR)/string_arm.o \
-        $(ARCH_DIR)/loader.o \
-        $(ARCH_DIR)/fat.o \
-        $(ARCH_DIR)/heap.o \
-        $(ARCH_DIR)/net.o \
-        $(ARCH_DIR)/genet.o \
-        $(ARCH_DIR)/lan95xx.o \
-        $(ARCH_DIR)/main.o
+OBJS := $(ARCH_DIR)/boot.arm.o \
+        $(ARCH_DIR)/bcm.arm.o \
+        $(ARCH_DIR)/uart.arm.o \
+        $(ARCH_DIR)/mailbox.arm.o \
+        $(ARCH_DIR)/gpio.arm.o \
+        $(ARCH_DIR)/dwc2.arm.o \
+        $(ARCH_DIR)/exception.arm.o \
+        $(ARCH_DIR)/irq.arm.o \
+        $(ARCH_DIR)/emmc.arm.o \
+        $(ARCH_DIR)/mmu.arm.o \
+        $(ARCH_DIR)/fb.arm.o \
+        $(ARCH_DIR)/pwm.arm.o \
+        $(ARCH_DIR)/i2c.arm.o \
+        $(ARCH_DIR)/spi.arm.o \
+        $(ARCH_DIR)/hwapi.arm.o \
+        $(ARCH_DIR)/syscall_arm.arm.o \
+        $(ARCH_DIR)/string_arm.arm.o \
+        $(ARCH_DIR)/loader.arm.o \
+        $(ARCH_DIR)/fat.arm.o \
+        $(ARCH_DIR)/heap.arm.o \
+        $(ARCH_DIR)/net.arm.o \
+        $(ARCH_DIR)/genet.arm.o \
+        $(ARCH_DIR)/lan95xx.arm.o \
+        $(ARCH_DIR)/main.arm.o
 
-DEPS := $(OBJS:.o=.d)
+MP_CORE := $(patsubst %.c,%.arm.o,$(filter-out %/persistentcode.c,$(wildcard kernel/micropython/py/*.c)))
+MP_PORT := kernel/micropython/ports/tos/math_stubs.arm.o \
+           kernel/micropython/ports/armtos/arm_hal.arm.o \
+           kernel/micropython/ports/armtos/arm_mp.arm.o \
+           kernel/micropython/ports/armtos/modpi.arm.o \
+           kernel/micropython/shared/runtime/pyexec.arm.o \
+           kernel/micropython/shared/runtime/sys_stdio_mphal.arm.o \
+           kernel/micropython/shared/readline/readline.arm.o
+
+OBJS += $(MP_CORE) $(MP_PORT)
+
+DEPS := $(OBJS:.arm.o=.arm.d)
 
 all: kernel8.img
 
-%.o: %.c
+kernel/micropython/py/%.arm.o: kernel/micropython/py/%.c
+	$(CC) $(MPFLAGS) -c $< -o $@
+
+kernel/micropython/shared/%.arm.o: kernel/micropython/shared/%.c
+	$(CC) $(MPFLAGS) -c $< -o $@
+
+kernel/micropython/ports/armtos/%.arm.o: kernel/micropython/ports/armtos/%.c
+	$(CC) $(MPFLAGS) -c $< -o $@
+
+kernel/micropython/ports/tos/%.arm.o: kernel/micropython/ports/tos/%.c
+	$(CC) $(MPFLAGS) -c $< -o $@
+
+%.arm.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-%.o: %.S
+%.arm.o: %.S
 	$(CC) $(ASFLAGS) -c $< -o $@
 
 kernel8.elf: $(OBJS) $(ARCH_DIR)/linker.ld

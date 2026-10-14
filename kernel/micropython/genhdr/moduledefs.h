@@ -37,8 +37,13 @@ extern const struct _mp_obj_module_t mp_module_sys;
 #define MODULE_DEF_SYS { MP_ROM_QSTR(MP_QSTR_sys), MP_ROM_PTR(&mp_module_sys) },
 
 
+extern const struct _mp_obj_module_t mp_module_pi;
+#undef MODULE_DEF_PI
+#define MODULE_DEF_PI { MP_ROM_QSTR(MP_QSTR_pi), MP_ROM_PTR(&mp_module_pi) },
+
 #define MICROPY_REGISTERED_MODULES \
     MODULE_DEF_BUILTINS \
+    MODULE_DEF_PI \
     MODULE_DEF_GC \
     MODULE_DEF_MATH \
     MODULE_DEF_MICROPYTHON \

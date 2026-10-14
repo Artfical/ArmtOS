@@ -36,6 +36,13 @@ core0:
     eret
 
 at_el1:
+    /* Let EL1 and EL0 use the floating-point and SIMD registers. Without this, the first
+     * such instruction traps -- and the interpreter's object model contains them even when
+     * its float support is turned off. */
+    mov     x0, #(3 << 20)
+    msr     cpacr_el1, x0
+    isb
+
     /* stack below the load address: the image starts at 0x80000 and grows up */
     ldr     x0, =_start
     mov     sp, x0

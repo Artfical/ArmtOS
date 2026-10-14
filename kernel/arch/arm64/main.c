@@ -14,6 +14,7 @@
 #include "loader.h"
 #include "heap.h"
 #include "net.h"
+#include "armpy.h"
 #include "version.h"
 
 /* What the firmware hands over, printed so a serial console shows the port is alive and
@@ -151,6 +152,8 @@ void shell(void)
             uart_puts("ls              list the programs on the card\n");
             uart_puts("run NAME.t      run a program from the card\n");
             uart_puts("eth             bring the Ethernet up and show its address\n");
+            uart_puts("py STATEMENT    run one line of Python\n");
+            uart_puts("python          the Python prompt (Ctrl-D to leave)\n");
             uart_puts("reboot          restart the board\n");
         } else if (str_eq(argv[0], "gpio") && argc >= 3) {
             int pin = parse_int(argv[1]), val = parse_int(argv[2]);
@@ -307,6 +310,18 @@ void shell(void)
                 timer_delay_ms(10);
             }
             if (!seen) uart_puts("  no traffic seen\n");
+        } else if (str_eq(argv[0], "py") && argc >= 2) {
+            /* The arguments were split on spaces, so they are joined back into one line. */
+            char stmt[112];
+            int o = 0;
+            for (int k = 1; k < argc && o < (int)sizeof(stmt) - 2; k++) {
+                if (k > 1) stmt[o++] = ' ';
+                for (const char *c2 = argv[k]; *c2 && o < (int)sizeof(stmt) - 1; c2++) stmt[o++] = *c2;
+            }
+            stmt[o] = 0;
+            armpy_exec(stmt);
+        } else if (str_eq(argv[0], "python")) {
+            armpy_repl();
         } else if (str_eq(argv[0], "reboot")) {
             uart_puts("rebooting\n");
             /* the watchdog, set to the shortest timeout, is how a Pi restarts itself */
