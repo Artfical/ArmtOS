@@ -32,6 +32,11 @@ OBJS := $(ARCH_DIR)/boot.o \
         $(ARCH_DIR)/pwm.o \
         $(ARCH_DIR)/i2c.o \
         $(ARCH_DIR)/spi.o \
+        $(ARCH_DIR)/hwapi.o \
+        $(ARCH_DIR)/syscall_arm.o \
+        $(ARCH_DIR)/string_arm.o \
+        $(ARCH_DIR)/loader.o \
+        $(ARCH_DIR)/fat.o \
         $(ARCH_DIR)/main.o
 
 DEPS := $(OBJS:.o=.d)

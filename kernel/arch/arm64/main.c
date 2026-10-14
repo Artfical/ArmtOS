@@ -10,6 +10,8 @@
 #include "pwm.h"
 #include "i2c.h"
 #include "spi.h"
+#include "fat.h"
+#include "loader.h"
 #include "version.h"
 
 /* What the firmware hands over, printed so a serial console shows the port is alive and
@@ -110,6 +112,16 @@ static int split(char *line, char **argv, int max)
     return n;
 }
 
+/* printed for each file the card holds */
+static void list_entry(const char *name, uint32_t size)
+{
+    uart_puts("  ");
+    uart_puts(name);
+    uart_puts("  ");
+    uart_put_dec(size);
+    uart_puts(" bytes\n");
+}
+
 void shell(void)
 {
     char line[128];
@@ -133,6 +145,8 @@ void shell(void)
             uart_puts("pwm PIN PCT     drive a pin as an analog level (12, 13, 18 or 19)\n");
             uart_puts("i2cscan         list the addresses answering on the I2C bus\n");
             uart_puts("adc CH          read a channel of an MCP3008 on SPI\n");
+            uart_puts("ls              list the programs on the card\n");
+            uart_puts("run NAME.t      run a program from the card\n");
             uart_puts("reboot          restart the board\n");
         } else if (str_eq(argv[0], "gpio") && argc >= 3) {
             int pin = parse_int(argv[1]), val = parse_int(argv[2]);
@@ -249,6 +263,16 @@ void shell(void)
             uart_puts(" = ");
             uart_put_dec((uint64_t)v);
             uart_puts(" of 1023\n");
+        } else if (str_eq(argv[0], "ls")) {
+            if (emmc_init() != 0 || fat_mount() != 0) { uart_puts("ls: no readable card\n"); continue; }
+            fat_list(list_entry);
+        } else if (str_eq(argv[0], "run") && argc >= 2) {
+            if (emmc_init() != 0 || fat_mount() != 0) { uart_puts("run: no readable card\n"); continue; }
+            static uint8_t image[256 * 1024] __attribute__((aligned(8)));
+            int n = fat_read_file(argv[1], image, sizeof(image));
+            if (n < 0) { uart_puts("run: not found on the card\n"); continue; }
+            loader_run(image, (uint32_t)n);
+            uart_puts("\n");
         } else if (str_eq(argv[0], "reboot")) {
             uart_puts("rebooting\n");
             /* the watchdog, set to the shortest timeout, is how a Pi restarts itself */

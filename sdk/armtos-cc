@@ -1,0 +1,43 @@
+#!/bin/bash
+# Builds a .t program for ArmtOS.
+#
+#   armtos-cc blink.c -o blink.t
+#
+# The result is a flat AArch64 image with a 4-byte little-endian footer giving the memory
+# it needs, because the .bss does not appear in the file and the loader has to know how
+# much to map beyond what it reads.
+set -e
+here=$(cd "$(dirname "$0")" && pwd)
+CROSS=${CROSS:-aarch64-linux-gnu-}
+out=a.t
+srcs=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -o) out=$2; shift 2;;
+        *)  srcs+=("$1"); shift;;
+    esac
+done
+[ ${#srcs[@]} -gt 0 ] || { echo "usage: armtos-cc FILE.c... -o OUT.t"; exit 1; }
+
+elf=${out%.t}.elf
+${CROSS}gcc -ffreestanding -nostdlib -nostartfiles -fno-pic -fno-pie -mgeneral-regs-only \
+    -O2 -Wall -Wextra -I "$here" \
+    -Wl,-T,"$here/user.ld" -Wl,--build-id=none \
+    "$here/start.S" "${srcs[@]}" -o "$elf"
+${CROSS}objcopy -O binary "$elf" "$out.bin"
+python3 - "$elf" "$out.bin" "$out" <<'PY'
+import sys, struct, subprocess, os
+elf, binf, out = sys.argv[1:4]
+nm = subprocess.run([os.environ.get('CROSS', 'aarch64-linux-gnu-') + 'nm', elf],
+                    capture_output=True, text=True).stdout
+end = 0
+for line in nm.splitlines():
+    f = line.split()
+    if len(f) == 3 and f[2] == '_end':
+        end = int(f[0], 16)
+data = open(binf, 'rb').read()
+mem = max(end - 0x200000, len(data))
+open(out, 'wb').write(data + struct.pack('<I', mem))
+print("%s: %d bytes of image, %d of memory" % (out, len(data), mem))
+PY
+rm -f "$out.bin" "$elf"

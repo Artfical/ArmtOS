@@ -67,8 +67,8 @@ vector_table:
     VECTOR  el1_invalid
     VECTOR  el1_invalid
 
-    /* lower EL, AArch64 */
-    VECTOR  el1_invalid
+    /* lower EL, AArch64 -- where a .t program's system calls and faults arrive */
+    VECTOR  el0_sync
     VECTOR  el1_irq
     VECTOR  el1_invalid
     VECTOR  el1_invalid
@@ -91,6 +91,36 @@ el1_sync:
 el1_irq:
     SAVE_REGS
     bl      arm_irq_handler
+    RESTORE_REGS
+    eret
+
+el0_sync:
+    SAVE_REGS
+    mrs     x9, esr_el1
+    lsr     x10, x9, #26                   /* the exception class */
+    cmp     x10, #0x15                     /* SVC from AArch64 */
+    b.ne    el0_fault
+
+    /* The call number is in x8 and the arguments in x0-x3, as they were saved above. */
+    ldp     x0, x1, [sp, #16 * 0]
+    ldp     x2, x3, [sp, #16 * 1]
+    ldr     x4, [sp, #16 * 4]              /* x8 */
+    mov     x5, x0
+    mov     x0, x4
+    mov     x4, x3
+    mov     x3, x2
+    mov     x2, x1
+    mov     x1, x5
+    bl      arm_syscall
+    str     x0, [sp, #16 * 0]              /* the result goes back in x0 */
+    RESTORE_REGS
+    eret
+
+el0_fault:
+    mrs     x0, esr_el1
+    mrs     x1, elr_el1
+    mrs     x2, far_el1
+    bl      arm_user_fault
     RESTORE_REGS
     eret
 
@@ -119,3 +149,14 @@ arm_irq_enable:
 arm_irq_disable:
     msr     daifset, #2
     ret
+
+/* Drops to EL0 and starts a program there: x0 is its entry, x1 its stack top. Control only
+   comes back through an exception, which is the point -- EL0 cannot touch kernel state. */
+.globl arm_enter_user
+arm_enter_user:
+    msr     elr_el1, x0
+    msr     sp_el0, x1
+    mov     x2, #0                         /* EL0t, interrupts enabled */
+    msr     spsr_el1, x2
+    isb
+    eret

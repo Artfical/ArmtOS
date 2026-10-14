@@ -2,6 +2,8 @@
 #include "bcm.h"
 #include "uart.h"
 
+void loader_return(void);
+
 /*
  * The ARM generic timer drives the tick. Its frequency is reported by the core
  * (19.2 MHz on a Pi 2/3, 54 MHz on a Pi 4, and whatever the firmware set on a Pi 5), so
@@ -138,6 +140,14 @@ void arm_sync_handler(uint64_t esr, uint64_t elr, uint64_t far)
 {
     report("synchronous exception", esr, elr, far);
     for (;;) __asm__ volatile("wfe");
+}
+
+/* A program that faults is ended; the board carries on, which is the whole point of
+ * running it at EL0 in its own window of memory. */
+void arm_user_fault(uint64_t esr, uint64_t elr, uint64_t far)
+{
+    report("the program faulted and was stopped", esr, elr, far);
+    loader_return();
 }
 
 void arm_invalid_handler(uint64_t esr, uint64_t elr, uint64_t far)
