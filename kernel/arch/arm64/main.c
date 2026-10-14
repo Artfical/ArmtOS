@@ -7,6 +7,9 @@
 #include "emmc.h"
 #include "mmu.h"
 #include "fb.h"
+#include "pwm.h"
+#include "i2c.h"
+#include "spi.h"
 #include "version.h"
 
 /* What the firmware hands over, printed so a serial console shows the port is alive and
@@ -127,6 +130,9 @@ void shell(void)
             uart_puts("uptime          how long the board has been running\n");
             uart_puts("sd              initialise the SD card and show its partitions\n");
             uart_puts("fb              put something on the screen\n");
+            uart_puts("pwm PIN PCT     drive a pin as an analog level (12, 13, 18 or 19)\n");
+            uart_puts("i2cscan         list the addresses answering on the I2C bus\n");
+            uart_puts("adc CH          read a channel of an MCP3008 on SPI\n");
             uart_puts("reboot          restart the board\n");
         } else if (str_eq(argv[0], "gpio") && argc >= 3) {
             int pin = parse_int(argv[1]), val = parse_int(argv[2]);
@@ -214,6 +220,35 @@ void shell(void)
             uart_puts("x");
             uart_put_dec(fb_height());
             uart_puts(" drawn\n");
+        } else if (str_eq(argv[0], "pwm") && argc >= 3) {
+            int pin = parse_int(argv[1]), pct = parse_int(argv[2]);
+            if (pct < 0 || pct > 100) { uart_puts("usage: pwm PIN 0..100\n"); continue; }
+            int ch = (pin == 12 || pin == 18) ? 0 : (pin == 13 || pin == 19) ? 1 : -1;
+            if (ch < 0) { uart_puts("pwm: only GPIO 12, 13, 18 and 19 can do this\n"); continue; }
+            if (pwm_init(ch, pin, 1024) != 0) { uart_puts("pwm: could not start\n"); continue; }
+            pwm_percent(ch, (uint32_t)pct);
+            uart_puts("GPIO ");
+            uart_put_dec((uint64_t)pin);
+            uart_puts(" at ");
+            uart_put_dec((uint64_t)pct);
+            uart_puts("%\n");
+        } else if (str_eq(argv[0], "i2cscan")) {
+            if (i2c_init(100000) != 0) { uart_puts("i2c: not available on this board\n"); continue; }
+            uint8_t found[16];
+            int n = i2c_scan(found, 16);
+            if (n == 0) uart_puts("i2c: nothing answered\n");
+            for (int k = 0; k < n; k++) { uart_puts("  "); uart_put_hex(found[k]); uart_puts("\n"); }
+        } else if (str_eq(argv[0], "adc") && argc >= 2) {
+            int ch = parse_int(argv[1]);
+            if (ch < 0 || ch > 7) { uart_puts("usage: adc 0..7\n"); continue; }
+            if (spi_init(1000000) != 0) { uart_puts("spi: not available on this board\n"); continue; }
+            int v = spi_adc_read(0, ch);
+            if (v < 0) { uart_puts("adc: no answer\n"); continue; }
+            uart_puts("channel ");
+            uart_put_dec((uint64_t)ch);
+            uart_puts(" = ");
+            uart_put_dec((uint64_t)v);
+            uart_puts(" of 1023\n");
         } else if (str_eq(argv[0], "reboot")) {
             uart_puts("rebooting\n");
             /* the watchdog, set to the shortest timeout, is how a Pi restarts itself */

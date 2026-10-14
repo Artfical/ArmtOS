@@ -29,6 +29,9 @@ OBJS := $(ARCH_DIR)/boot.o \
         $(ARCH_DIR)/emmc.o \
         $(ARCH_DIR)/mmu.o \
         $(ARCH_DIR)/fb.o \
+        $(ARCH_DIR)/pwm.o \
+        $(ARCH_DIR)/i2c.o \
+        $(ARCH_DIR)/spi.o \
         $(ARCH_DIR)/main.o
 
 DEPS := $(OBJS:.o=.d)
