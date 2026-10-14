@@ -152,11 +152,46 @@ arm_irq_disable:
 
 /* Drops to EL0 and starts a program there: x0 is its entry, x1 its stack top. Control only
    comes back through an exception, which is the point -- EL0 cannot touch kernel state. */
+/*
+ * Starting a program is a call that returns when the program ends, so everything the C
+ * caller expects to survive a call -- x19-x30 and sp -- is saved here first and put back by
+ * arm_user_return, however deep in the exception path the program's end was noticed.
+ */
 .globl arm_enter_user
 arm_enter_user:
+    adrp    x3, loader_ctx
+    add     x3, x3, :lo12:loader_ctx
+    stp     x19, x20, [x3, #0]
+    stp     x21, x22, [x3, #16]
+    stp     x23, x24, [x3, #32]
+    stp     x25, x26, [x3, #48]
+    stp     x27, x28, [x3, #64]
+    stp     x29, x30, [x3, #80]
+    mov     x4, sp
+    str     x4, [x3, #96]
     msr     elr_el1, x0
     msr     sp_el0, x1
     mov     x2, #0                         /* EL0t, interrupts enabled */
     msr     spsr_el1, x2
     isb
     eret
+
+.globl arm_user_return
+arm_user_return:
+    adrp    x3, loader_ctx
+    add     x3, x3, :lo12:loader_ctx
+    ldp     x19, x20, [x3, #0]
+    ldp     x21, x22, [x3, #16]
+    ldp     x23, x24, [x3, #32]
+    ldp     x25, x26, [x3, #48]
+    ldp     x27, x28, [x3, #64]
+    ldp     x29, x30, [x3, #80]
+    ldr     x4, [x3, #96]
+    mov     sp, x4
+    mov     x0, #0
+    ret
+
+.bss
+.balign 16
+loader_ctx:
+    .skip   112
