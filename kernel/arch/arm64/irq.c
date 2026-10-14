@@ -136,8 +136,32 @@ static void report(const char *what, uint64_t esr, uint64_t elr, uint64_t far)
     uart_puts("\n");
 }
 
+/* Reads a register that might not exist. On the real board a block is either there or reads
+ * back as ones; an emulator (or a board without the block) answers with an external abort,
+ * and that would otherwise halt the kernel. While a probe is in flight the abort is
+ * swallowed: the faulting load is skipped and the probe reports failure. */
+static volatile int probing, probe_faulted;
+
+int mmio_probe(uint64_t addr, uint32_t *out)
+{
+    probe_faulted = 0;
+    probing = 1;
+    __asm__ volatile("dsb sy; isb" ::: "memory");
+    uint32_t v = mmio_read(addr);
+    __asm__ volatile("dsb sy; isb" ::: "memory");
+    probing = 0;
+    if (probe_faulted) return -1;
+    *out = v;
+    return 0;
+}
+
 void arm_sync_handler(uint64_t esr, uint64_t elr, uint64_t far)
 {
+    if (probing && (esr >> 26) == 0x25) {          /* data abort taken without a change of level */
+        probe_faulted = 1;
+        __asm__ volatile("msr elr_el1, %0" :: "r"(elr + 4));
+        return;
+    }
     report("synchronous exception", esr, elr, far);
     for (;;) __asm__ volatile("wfe");
 }

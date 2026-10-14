@@ -16,9 +16,17 @@ int eth_init(void)
 {
     active = 0;
 
+    /* The Pi 5's Ethernet is in the RP1 chip across PCIe, and its USB host is there too.
+     * Poking the addresses the other boards use would write into nothing, or into something
+     * else, so it is left alone. */
+    if (bcm_generation >= 5) {
+        uart_puts("eth: the Pi 5's Ethernet is behind RP1 (PCIe), which this kernel does not drive\n");
+        return -1;
+    }
+
     /* On a Pi 4 the controller is in the SoC; trying it first costs one register read and
      * answers immediately on a board that does not have it. */
-    if (bcm_generation >= 4 && genet_driver.start() == 0) {
+    if (bcm_generation == 4 && genet_driver.start() == 0) {
         active = &genet_driver;
         genet_publish_mac(mac);
     } else {

@@ -20,6 +20,9 @@ extern int      bcm_generation;         /* 2, 3, 4 or 5 */
 void     bcm_detect(void);              /* works out which Pi this is */
 const char *bcm_model_name(void);
 
+/* Like mmio_read, but returns -1 instead of halting if nothing answers at that address. */
+int mmio_probe(uint64_t addr, uint32_t *out);
+
 static inline void mmio_write(uint64_t addr, uint32_t value)
 {
     *(volatile uint32_t *)addr = value;

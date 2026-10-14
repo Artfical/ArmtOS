@@ -99,8 +99,12 @@ This is an honest list, not a roadmap of intentions:
 
 - **Ethernet is written but never tested.** The drivers for both chips exist — GENET for a
   Pi 4, LAN95xx over USB for a Pi 2/3 — but no QEMU emulates either, including 9.1 with its
-  `raspi4b` machine, which models only the USB controller. The code is honest about it: `eth`
-  reports what it could not find rather than pretending. It needs a real board to finish.
+  `raspi4b` machine, which models only the USB controller. The GENET driver was rewritten
+  against Linux's `bcmgenet` register map (a first version used the wrong base address and
+  never enabled the DMA engine), but a driver that has never touched the silicon is still a
+  guess: on a real Pi 4, `eth` prints the controller's revision register, the PHY it found and
+  the negotiated link, which is what to report if it fails. `eth` says plainly when it finds
+  nothing rather than pretending.
 - **USB 3.** On a Pi 4 that is a VL805 controller behind PCIe, and on a Pi 5 it is in RP1 —
   again, nothing here can emulate either.
 - **The Pi 5's header.** Its GPIO, USB and Ethernet all live in the RP1 companion chip
