@@ -1,5 +1,6 @@
 #include "mailbox.h"
 #include "bcm.h"
+#include "dma.h"
 
 /*
  * Property mailbox, channel 8. A request is a 16-byte-aligned buffer of tags; the firmware
@@ -17,9 +18,18 @@
 
 /* The GPU sees ARM memory through a window; on the Pi 2/3 the uncached alias is at
  * 0xC0000000, which is what a mailbox buffer address has to be expressed in. */
-#define GPU_BUS(addr) (((uint32_t)(uint64_t)(addr) & 0x3FFFFFFF) | 0xC0000000)
+#define GPU_BUS(addr) dma_gpu_bus(addr)
 
-static volatile uint32_t mbox_buf[36] __attribute__((aligned(16)));
+/* The buffer is taken from the non-cacheable DMA region: the firmware writes its answers
+ * straight into memory, and with the caches on a cached buffer would show the CPU its own
+ * stale request instead. Taken on first use so the call works before the MMU does. */
+#define mbox_buf mbox_ptr()
+static volatile uint32_t *mbox_ptr(void)
+{
+    static volatile uint32_t *p;
+    if (!p) p = (volatile uint32_t *)dma_alloc(36 * 4);
+    return p;
+}
 
 static int mailbox_call(void)
 {
@@ -45,6 +55,21 @@ int mailbox_board_revision(uint32_t *out)
     mbox_buf[6] = 0;                 /* end tag */
     if (mailbox_call() != 0) return -1;
     *out = mbox_buf[5];
+    return 0;
+}
+
+int mailbox_mac_address(uint8_t mac[6])
+{
+    mbox_buf[0] = 8 * 4;
+    mbox_buf[1] = 0;
+    mbox_buf[2] = 0x00010003;        /* get board MAC address */
+    mbox_buf[3] = 6;
+    mbox_buf[4] = 0;
+    mbox_buf[5] = 0;
+    mbox_buf[6] = 0;
+    mbox_buf[7] = 0;                 /* end tag */
+    if (mailbox_call() != 0) return -1;
+    for (int i = 0; i < 6; i++) mac[i] = (uint8_t)(mbox_buf[5 + i / 4] >> (8 * (i % 4)));
     return 0;
 }
 

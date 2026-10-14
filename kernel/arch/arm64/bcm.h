@@ -13,6 +13,7 @@ extern uint64_t bcm_periph_base;
 /* The console is not always in the peripheral block: on a Pi 5 the legacy peripherals
  * moved and the GPIO header is behind a separate chip, so the UART has its own base. */
 extern uint64_t bcm_uart_base;
+extern uint64_t bcm_mmio_low;           /* lowest address that is registers rather than RAM */
 extern int      bcm_has_legacy_gpio;    /* 0 on a Pi 5, whose header is behind RP1 */
 extern int      bcm_generation;         /* 2, 3, 4 or 5 */
 

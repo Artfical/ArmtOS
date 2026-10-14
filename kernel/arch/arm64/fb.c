@@ -1,6 +1,7 @@
 #include "fb.h"
 #include "mailbox.h"
 #include "uart.h"
+#include "mmu.h"
 
 static volatile uint32_t *fb;
 static uint32_t fb_w, fb_h, fb_pitch_px;
@@ -18,6 +19,8 @@ int fb_init(uint32_t width, uint32_t height)
         uart_puts("fb: the firmware refused a framebuffer\n");
         return -1;
     }
+    /* The GPU scans this memory out; pixels held back in the CPU's cache would never show. */
+    if (mmu_enabled()) mmu_set_uncached(addr, size ? size : (uint64_t)pitch * height);
     fb = (volatile uint32_t *)addr;
     fb_w = width;
     fb_h = height;

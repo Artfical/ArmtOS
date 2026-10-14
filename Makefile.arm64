@@ -32,6 +32,7 @@ OBJS := $(ARCH_DIR)/boot.arm.o \
         $(ARCH_DIR)/bcm.arm.o \
         $(ARCH_DIR)/uart.arm.o \
         $(ARCH_DIR)/mailbox.arm.o \
+        $(ARCH_DIR)/dma.arm.o \
         $(ARCH_DIR)/gpio.arm.o \
         $(ARCH_DIR)/dwc2.arm.o \
         $(ARCH_DIR)/exception.arm.o \

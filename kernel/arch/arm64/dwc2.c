@@ -1,5 +1,7 @@
 #include "dwc2.h"
 #include "bcm.h"
+#include "dma.h"
+#include "string_arm.h"
 #include "uart.h"
 
 /*
@@ -66,10 +68,20 @@ static usb_device_t devices[USB_MAX_DEVICES];
 static int ndevices;
 static int next_address = 1;
 
-/* Transfers go through memory the controller reads by physical address; with the MMU off
- * these are the same, but the buffer still has to be aligned for DMA. */
-static uint8_t dma_buf[1024] __attribute__((aligned(64)));
-static uint8_t setup_buf[8] __attribute__((aligned(64)));
+/* The controller reads and writes memory behind the CPU's back, so every transfer goes
+ * through buffers from the non-cacheable DMA region (dma.h) and is copied in or out. A
+ * caller's buffer -- often on the stack -- would otherwise be half in the cache. */
+#define XFER_MAX 2048
+static uint8_t *dma_buf;
+static uint8_t *setup_buf;
+static void dma_buffers(void)
+{
+    if (!dma_buf) { dma_buf = dma_alloc(XFER_MAX); setup_buf = dma_alloc(64); }
+}
+
+/* Data toggle per device address, endpoint and direction: bulk packets alternate DATA0 and
+ * DATA1, and a device silently drops one that repeats the toggle it last saw. */
+static uint8_t toggle[16][16][2];
 
 static void udelay(int us)
 {
@@ -138,7 +150,7 @@ static int port_reset(void)
 
 /* The controller reaches memory through the same GPU-side window the mailbox uses, so a
  * buffer has to be handed over as a bus address, not the one the CPU sees. */
-#define USB_BUS(addr) (((uint32_t)(uint64_t)(addr) & 0x3FFFFFFF) | 0xC0000000)
+#define USB_BUS(addr) dma_gpu_bus(addr)
 
 /* endpoint types as the channel register encodes them */
 enum { EP_CONTROL = 0, EP_ISOC = 1, EP_BULK = 2, EP_INTERRUPT = 3 };
@@ -159,8 +171,12 @@ static int channel_xfer(int addr, int ep, int in, int pid, void *buf, int len, i
 
     int packets = (len + maxp - 1) / maxp;
     if (packets == 0) packets = 1;
+    dma_buffers();
+    if (len > XFER_MAX || !dma_buf) return -1;
+    if (buf != setup_buf && buf != dma_buf && !in && len) memcpy(dma_buf, buf, (size_t)len);
+    void *dma = (buf == setup_buf) ? setup_buf : dma_buf;     /* dma_buf as a caller's buffer is already in place */
     mmio_write(HCTSIZ(0), ((uint32_t)pid << 29) | ((uint32_t)packets << 19) | (uint32_t)len);
-    mmio_write(HCDMA(0), USB_BUS(buf));
+    mmio_write(HCDMA(0), USB_BUS(dma));
     mmio_write(HCCHAR(0), chr | HCCHAR_ENA);
 
     for (int i = 0; i < 100000; i++) {
@@ -168,7 +184,9 @@ static int channel_xfer(int addr, int ep, int in, int pid, void *buf, int len, i
         if (s & HCINT_XFERCOMP) {
             mmio_write(HCINT(0), 0xFFFFFFFF);
             uint32_t left = mmio_read(HCTSIZ(0)) & 0x7FFFF;
-            return len - (int)left;
+            int got = len - (int)left;
+            if (in && got > 0 && buf != setup_buf && buf != dma_buf) memcpy(buf, dma_buf, (size_t)got);
+            return got;
         }
         if (s & (HCINT_STALL | HCINT_XACTERR)) {
             mmio_write(HCINT(0), 0xFFFFFFFF);
@@ -212,7 +230,16 @@ int usb_control(usb_device_t *dev, uint8_t rtype, uint8_t req, uint16_t value,
 int usb_bulk(usb_device_t *dev, uint8_t ep, void *data, int len)
 {
     int in = (ep & 0x80) != 0;
-    return channel_xfer(dev->address, ep & 0xF, in, 0, data, len, dev->speed, 64, EP_BULK);
+    int maxp = dev->speed == 0 ? 512 : 64;           /* a high-speed bulk packet is 512 bytes */
+    uint8_t *t = &toggle[dev->address & 15][ep & 15][in];
+    int got = channel_xfer(dev->address, ep & 0xF, in, *t ? 2 : 0, data, len, dev->speed, maxp, EP_BULK);
+    if (got >= 0) {
+        int n = in ? got : len;
+        int packets = (n + maxp - 1) / maxp;
+        if (packets == 0) packets = 1;
+        *t ^= (uint8_t)(packets & 1);
+    }
+    return got;
 }
 
 /* ---- hubs ----
@@ -308,6 +335,7 @@ int usb_enumerate(void)
 {
     ndevices = 0;
     next_address = 1;
+    memset(toggle, 0, sizeof(toggle));
     for (int i = 0; i < USB_MAX_DEVICES; i++) devices[i].used = 0;
 
     uint32_t hprt = mmio_read(HPRT);

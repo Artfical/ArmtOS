@@ -11,6 +11,7 @@
 
 uint64_t bcm_periph_base = 0x3F000000;
 uint64_t bcm_uart_base   = 0x3F201000;
+uint64_t bcm_mmio_low    = 0x3F000000;
 int      bcm_has_legacy_gpio = 1;
 int      bcm_generation = 3;
 
@@ -28,6 +29,7 @@ void bcm_detect(void)
          * header, USB and Ethernet all live in the separate RP1 chip across PCIe -- so the
          * old GPIO block simply is not there, and pretending otherwise would write into
          * whatever happens to be mapped at that address. */
+        bcm_mmio_low    = 0x107C000000ull;
         bcm_periph_base = 0x107C000000ull;
         bcm_uart_base   = 0x107D001000ull;        /* the debug UART on the 3-pin connector */
         bcm_has_legacy_gpio = 0;
@@ -35,6 +37,9 @@ void bcm_detect(void)
         model = "Raspberry Pi 5 (BCM2712)";
         break;
     case 0xD08:                                   /* Cortex-A72: Pi 4 */
+        /* The BCM2711 puts its PCIe, Ethernet and USB 3 blocks in the 0xFC000000 window, below
+         * the legacy peripherals at 0xFE000000 -- all of it is registers, not memory. */
+        bcm_mmio_low    = 0xFC000000;
         bcm_periph_base = 0xFE000000;
         bcm_uart_base   = 0xFE201000;
         bcm_has_legacy_gpio = 1;
@@ -43,6 +48,7 @@ void bcm_detect(void)
         break;
     case 0xD03:                                   /* Cortex-A53: Pi 3 */
         bcm_periph_base = 0x3F000000;
+        bcm_mmio_low    = 0x3F000000;
         bcm_uart_base   = 0x3F201000;
         bcm_generation = 3;
         model = "Raspberry Pi 3 (BCM2837)";

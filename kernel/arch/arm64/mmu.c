@@ -1,6 +1,7 @@
 #include "mmu.h"
 #include "bcm.h"
 #include "uart.h"
+#include "dma.h"
 
 /*
  * A flat, identity map built from 2 MB blocks.
@@ -19,15 +20,17 @@
 #define DESC_TABLE  0x3
 #define DESC_BLOCK  0x1
 #define DESC_AF     (1ull << 10)          /* access flag: without it the first touch faults */
+#define DESC_SH_OUTER (2ull << 8)
 #define DESC_SH_INNER (3ull << 8)         /* inner shareable, so the caches stay coherent */
 #define DESC_ATTR(i)  ((uint64_t)(i) << 2)
 #define DESC_AP_RW_EL0 (1ull << 6)        /* AP[1]: readable and writable from EL0 too */
 #define DESC_PXN       (1ull << 53)       /* EL1 may not execute here */
 
-/* MAIR entries: 0 = device nGnRnE, 1 = normal write-back */
-#define MAIR_VALUE  ((0x00ull << 0) | (0xFFull << 8))
+/* MAIR entries: 0 = device nGnRnE, 1 = normal write-back, 2 = normal non-cacheable */
+#define MAIR_VALUE  ((0x00ull << 0) | (0xFFull << 8) | (0x44ull << 16))
 #define ATTR_DEVICE 0
 #define ATTR_NORMAL 1
+#define ATTR_NC     2                       /* normal memory, not cacheable: for DMA buffers */
 
 /* How much address space to describe. Four gigabytes covers RAM and the peripherals on a
  * Pi 2 through 4; a Pi 5 puts its registers far higher, which is why the count is taken
@@ -55,10 +58,13 @@ void mmu_init(void)
     for (int g = 0; g < gigs; g++) {
         for (int i = 0; i < ENTRIES; i++) {
             uint64_t addr = ((uint64_t)g << 30) | ((uint64_t)i * BLOCK_2MB);
-            /* Anything at or above the peripheral base is a register window, not memory. */
-            int device = addr >= bcm_periph_base;
+            /* Anything at or above the lowest register address is a window, not memory. */
+            int device = addr >= bcm_mmio_low;
+            int dma = addr >= DMA_REGION_BASE && addr < DMA_REGION_BASE + DMA_REGION_SIZE;
             l2[g][i] = addr | DESC_BLOCK | DESC_AF
-                     | (device ? DESC_ATTR(ATTR_DEVICE) : (DESC_ATTR(ATTR_NORMAL) | DESC_SH_INNER));
+                     | (device ? DESC_ATTR(ATTR_DEVICE) :
+                        dma    ? (DESC_ATTR(ATTR_NC) | DESC_SH_OUTER) :
+                                 (DESC_ATTR(ATTR_NORMAL) | DESC_SH_INNER));
         }
         l1[g] = (uint64_t)(uintptr_t)l2[g] | DESC_TABLE;
     }
@@ -102,6 +108,22 @@ void mmu_set_user(uint64_t addr, uint64_t size)
         int i = (int)((a >> 21) & 0x1FF);
         if (g < 0 || g >= 8) continue;
         l2[g][i] |= DESC_AP_RW_EL0;
+    }
+    __asm__ volatile("dsb ishst; tlbi vmalle1is; dsb ish; isb");
+}
+
+/* Makes the 2 MB blocks covering a range non-cacheable. The framebuffer is memory the GPU
+ * scans out; pixels left in the CPU's cache would never reach the screen. */
+void mmu_set_uncached(uint64_t addr, uint64_t size)
+{
+    if (!size) return;
+    uint64_t first = addr & ~(BLOCK_2MB - 1);
+    uint64_t last  = (addr + size - 1) & ~(BLOCK_2MB - 1);
+    for (uint64_t a = first; a <= last; a += BLOCK_2MB) {
+        int g = (int)(a >> 30);
+        int i = (int)((a >> 21) & 0x1FF);
+        if (g < 0 || g >= 8) continue;
+        l2[g][i] = (l2[g][i] & ~(7ull << 2) & ~(3ull << 8)) | DESC_ATTR(ATTR_NC) | DESC_SH_OUTER;
     }
     __asm__ volatile("dsb ishst; tlbi vmalle1is; dsb ish; isb");
 }
