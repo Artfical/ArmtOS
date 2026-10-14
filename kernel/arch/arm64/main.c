@@ -13,6 +13,7 @@
 #include "fat.h"
 #include "loader.h"
 #include "heap.h"
+#include "net.h"
 #include "version.h"
 
 /* What the firmware hands over, printed so a serial console shows the port is alive and
@@ -149,6 +150,7 @@ void shell(void)
             uart_puts("adc CH          read a channel of an MCP3008 on SPI\n");
             uart_puts("ls              list the programs on the card\n");
             uart_puts("run NAME.t      run a program from the card\n");
+            uart_puts("eth             bring the Ethernet up and show its address\n");
             uart_puts("reboot          restart the board\n");
         } else if (str_eq(argv[0], "gpio") && argc >= 3) {
             int pin = parse_int(argv[1]), val = parse_int(argv[2]);
@@ -280,6 +282,31 @@ void shell(void)
             if (n < 0) { uart_puts("run: not found on the card\n"); continue; }
             loader_run(image, (uint32_t)n);
             uart_puts("\n");
+        } else if (str_eq(argv[0], "eth")) {
+            if (eth_init() != 0) { uart_puts("eth: no Ethernet controller this kernel can drive\n"); continue; }
+            uart_puts(eth_name());
+            uart_puts("\n  address ");
+            const uint8_t *m = eth_mac();
+            for (int k = 0; k < 6; k++) {
+                uart_putc("0123456789ABCDEF"[m[k] >> 4]);
+                uart_putc("0123456789ABCDEF"[m[k] & 0xF]);
+                if (k < 5) uart_putc(':');
+            }
+            uart_puts("\n");
+            /* Listen briefly so a link that is already carrying traffic proves itself. */
+            static uint8_t frame[ETH_MTU];
+            int seen = 0;
+            for (int t = 0; t < 200 && seen < 3; t++) {
+                int n = eth_recv(frame, sizeof(frame));
+                if (n > 0) {
+                    seen++;
+                    uart_puts("  frame of ");
+                    uart_put_dec((uint64_t)n);
+                    uart_puts(" bytes\n");
+                }
+                timer_delay_ms(10);
+            }
+            if (!seen) uart_puts("  no traffic seen\n");
         } else if (str_eq(argv[0], "reboot")) {
             uart_puts("rebooting\n");
             /* the watchdog, set to the shortest timeout, is how a Pi restarts itself */

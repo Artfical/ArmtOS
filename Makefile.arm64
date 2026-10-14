@@ -38,6 +38,9 @@ OBJS := $(ARCH_DIR)/boot.o \
         $(ARCH_DIR)/loader.o \
         $(ARCH_DIR)/fat.o \
         $(ARCH_DIR)/heap.o \
+        $(ARCH_DIR)/net.o \
+        $(ARCH_DIR)/genet.o \
+        $(ARCH_DIR)/lan95xx.o \
         $(ARCH_DIR)/main.o
 
 DEPS := $(OBJS:.o=.d)
