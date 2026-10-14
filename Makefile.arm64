@@ -37,6 +37,7 @@ OBJS := $(ARCH_DIR)/boot.o \
         $(ARCH_DIR)/string_arm.o \
         $(ARCH_DIR)/loader.o \
         $(ARCH_DIR)/fat.o \
+        $(ARCH_DIR)/heap.o \
         $(ARCH_DIR)/main.o
 
 DEPS := $(OBJS:.o=.d)

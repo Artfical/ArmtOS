@@ -12,6 +12,7 @@
 #include "spi.h"
 #include "fat.h"
 #include "loader.h"
+#include "heap.h"
 #include "version.h"
 
 /* What the firmware hands over, printed so a serial console shows the port is alive and
@@ -47,6 +48,7 @@ void arm_main(void)
         uart_puts(" MB\n");
     }
 
+    heap_init();
     mmu_init();
     uart_puts("[OK] MMU on, caches enabled\n");
     irq_init();
@@ -197,6 +199,11 @@ void shell(void)
             uart_puts(" s, ");
             uart_put_dec(timer_ticks());
             uart_puts(" ticks\n");
+        } else if (str_eq(argv[0], "heap")) {
+            uart_put_dec(heap_used() / 1024);
+            uart_puts(" KB used of ");
+            uart_put_dec(heap_total() / (1024 * 1024));
+            uart_puts(" MB\n");
         } else if (str_eq(argv[0], "sd")) {
             if (emmc_init() != 0) { uart_puts("sd: no card\n"); continue; }
             uart_puts("card: ");
