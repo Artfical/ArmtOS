@@ -29,6 +29,26 @@ make -f Makefile.arm64
 qemu-system-aarch64 -M raspi3b -kernel kernel8.img -serial stdio -display none
 ```
 
+A Pi 4 needs QEMU 7.2 or newer (`-M raspi4b`); the 6.2 that Ubuntu 22.04 ships has no such
+machine. Both boards are checked on every commit.
+
+**Writing a program.** `sdk/armtos-cc` builds one, and `sdk/examples/` has three:
+
+```
+./sdk/armtos-cc sdk/examples/blink.c -o blink.t
+mcopy -i armtos.img@@1M blink.t ::BLINK.T       # onto the card, beside kernel8.img
+```
+
+then `run blink.t` on the board. The same hardware is reachable from Python:
+
+```python
+import pi
+pi.pin_mode(21, pi.OUTPUT)
+pi.write(21, 1)
+pi.analog_write(18, 512)        # PWM
+print(pi.i2c_scan())
+```
+
 ## What it does so far
 
 ```
@@ -67,17 +87,20 @@ same way, by taking a screendump of the framebuffer.
 | **USB 2.0 host** | DWC2 in host mode: port reset, control and bulk transfers, device addressing, and a walk of the hub's ports — which matters because every Pi has a hub on the board and everything else sits behind it (`dwc2.c`). Storage and network devices are both found. |
 | **SD card** | The host controller brought up through the full identification sequence, blocks read and written, and the card's size taken from its own CSD (`emmc.c`). The partition table of a card is read and listed. |
 | **Display** | A framebuffer from the firmware, with rectangles, lines and an 8x8 font — and the pixel order taken from what the firmware actually set, not what was asked for (`fb.c`). |
-| **Shell** | A serial shell: `help`, `board`, `mem`, `uptime`, `gpio`, `read`, `usb`, `sd`, `fb`, `reboot`. |
+| **GPIO extras** | PWM on GPIO 12, 13, 18 and 19 — the closest a Pi has to an analog output, since there is no DAC. I2C on GPIO 2/3 with a bus scan, and SPI on GPIO 7-11, which is how an external ADC is reached: the board cannot measure a voltage itself (`pwm.c`, `i2c.c`, `spi.c`). |
+| **Programs** | A `.t` binary is read from the card's FAT partition, loaded at a fixed address, and run at EL0 in its own window of memory. It reaches the hardware through system calls, and a fault ends the program rather than the board (`loader.c`, `syscall_arm.c`, `fat.c`). |
+| **Python** | MicroPython built for AArch64, with a `pi` module covering every pin, bus and the display. `py print(2**100)` and `python` for a prompt. |
+| **Ethernet** | GENET for the Pi 4's built-in controller, and the LAN95xx that sits on the USB bus of a Pi 2/3, behind one interface that picks whichever the board has (`net.c`). **Untested** — see below. |
+| **Shell** | A serial shell: `help`, `board`, `mem`, `uptime`, `heap`, `gpio`, `read`, `pwm`, `i2cscan`, `adc`, `usb`, `sd`, `ls`, `run`, `fb`, `eth`, `py`, `python`, `reboot`. |
 
 ## What is not there yet
 
 This is an honest list, not a roadmap of intentions:
 
-- **Ethernet.** The port on a Pi 3 is a SMSC LAN9514 behind the USB hub, on a Pi 4 the
-  memory-mapped GENET block, and on a Pi 5 it is behind RP1. The USB groundwork underneath
-  is working and tested, but none of those chips is emulated by any QEMU available here, so
-  no driver for them has been written: shipping one that has never moved a packet would be
-  a claim, not a feature.
+- **Ethernet is written but never tested.** The drivers for both chips exist — GENET for a
+  Pi 4, LAN95xx over USB for a Pi 2/3 — but no QEMU emulates either, including 9.1 with its
+  `raspi4b` machine, which models only the USB controller. The code is honest about it: `eth`
+  reports what it could not find rather than pretending. It needs a real board to finish.
 - **USB 3.** On a Pi 4 that is a VL805 controller behind PCIe, and on a Pi 5 it is in RP1 —
   again, nothing here can emulate either.
 - **The Pi 5's header.** Its GPIO, USB and Ethernet all live in the RP1 companion chip
@@ -105,7 +128,11 @@ This is an honest list, not a roadmap of intentions:
 
 ```
 kernel/arch/arm64/     the ARM port: boot.S, exception.S, bcm.c, uart.c, mailbox.c,
-                       mmu.c, irq.c, gpio.c, dwc2.c, emmc.c, fb.c
+                       mmu.c, irq.c, heap.c, gpio.c, pwm.c, i2c.c, spi.c, dwc2.c,
+                       emmc.c, fat.c, fb.c, net.c, genet.c, lan95xx.c, hwapi.c,
+                       syscall_arm.c, loader.c
+kernel/micropython/ports/armtos/   the Python port: arm_hal.c, arm_mp.c, modpi.c
+sdk/                   armtos-cc, armtos.h and examples for writing .t programs
 tools/image/           mkimage.sh, which turns kernel8.img into a bootable card image
 Makefile.arm64         the ARM build
 Makefile               the original x86 build, untouched
