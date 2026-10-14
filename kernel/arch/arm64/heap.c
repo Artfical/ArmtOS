@@ -12,6 +12,7 @@
 extern char _end[];                        /* where the kernel image stops, from the linker */
 
 #define HEAP_SIZE  (64 * 1024 * 1024)
+#define HEAP_FLOOR 0x400000                /* first address past the user program window */
 #define ALIGN(n)   (((n) + 15) & ~(size_t)15)
 #define MAGIC      0x48454150u             /* "HEAP", to catch a pointer that is not ours */
 
@@ -28,7 +29,11 @@ static size_t used;
 
 void heap_init(void)
 {
-    heap_start = (char *)ALIGN((size_t)(uintptr_t)_end);
+    /* The window a .t program runs in (loader.h) is 0x200000-0x400000, and loading a program
+     * overwrites it; a heap that started right after the kernel image would run through it. */
+    size_t start = (size_t)(uintptr_t)_end;
+    if (start < HEAP_FLOOR) start = HEAP_FLOOR;
+    heap_start = (char *)ALIGN(start);
     heap_end = heap_start + HEAP_SIZE;
     head = (block_t *)heap_start;
     head->magic = MAGIC;
