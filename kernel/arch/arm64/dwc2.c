@@ -227,6 +227,38 @@ int usb_control(usb_device_t *dev, uint8_t rtype, uint8_t req, uint16_t value,
     return got;
 }
 
+int usb_get_config(usb_device_t *dev, int index, uint8_t *buf, int max)
+{
+    uint8_t head[9];
+    if (usb_control(dev, 0x80, REQ_GET_DESCRIPTOR, (uint16_t)((DESC_CONFIG << 8) | index), 0, head, 9) < 9) return -1;
+    int total = head[2] | (head[3] << 8);
+    if (total > max) total = max;
+    if (total > XFER_MAX) total = XFER_MAX;
+    return usb_control(dev, 0x80, REQ_GET_DESCRIPTOR, (uint16_t)((DESC_CONFIG << 8) | index), 0, buf, (uint16_t)total);
+}
+
+int usb_get_string(usb_device_t *dev, int index, char *out, int max)
+{
+    uint8_t b[128];
+    int n = usb_control(dev, 0x80, REQ_GET_DESCRIPTOR, (uint16_t)((3 << 8) | index), 0x0409, b, sizeof(b));
+    if (n < 2 || b[0] < 2) return -1;
+    int len = (b[0] < n ? b[0] : n);
+    int o = 0;
+    for (int i = 2; i + 1 < len && o + 1 < max; i += 2) out[o++] = (char)b[i];   /* UTF-16LE, ASCII range */
+    out[o] = 0;
+    return o;
+}
+
+int usb_set_config(usb_device_t *dev, int value)
+{
+    return usb_control(dev, 0x00, REQ_SET_CONFIG, (uint16_t)value, 0, 0, 0) < 0 ? -1 : 0;
+}
+
+int usb_set_interface(usb_device_t *dev, int iface, int alt)
+{
+    return usb_control(dev, 0x01, 11 /* SET_INTERFACE */, (uint16_t)alt, (uint16_t)iface, 0, 0) < 0 ? -1 : 0;
+}
+
 int usb_bulk(usb_device_t *dev, uint8_t ep, void *data, int len)
 {
     int in = (ep & 0x80) != 0;
@@ -240,6 +272,72 @@ int usb_bulk(usb_device_t *dev, uint8_t ep, void *data, int len)
         *t ^= (uint8_t)(packets & 1);
     }
     return got;
+}
+
+/*
+ * Receiving without waiting. A network card has nothing to say most of the time, and a
+ * bulk IN transfer to an idle device is answered with NAK; the blocking usb_bulk would sit
+ * through its whole timeout on every poll. This keeps one IN transfer armed on channel 1 and
+ * looks at it each time it is asked: a finished transfer is returned, a NAKed one is simply
+ * started again, and a transfer still in flight costs nothing.
+ */
+static uint8_t *rx_dma;
+static int rx_armed;
+static usb_device_t *rx_dev;
+static uint8_t rx_ep;
+
+int usb_bulk_in_poll(usb_device_t *dev, uint8_t ep, void *data, int max)
+{
+    if (!rx_dma) rx_dma = dma_alloc(XFER_MAX);
+    if (!rx_dma) return -1;
+    int maxp = dev->speed == 0 ? 512 : 64;
+    uint8_t *t = &toggle[dev->address & 15][ep & 15][1];
+
+    if (rx_armed && (rx_dev != dev || rx_ep != ep)) rx_armed = 0;
+
+    if (rx_armed) {
+        uint32_t s = mmio_read(HCINT(1));
+        if (s & HCINT_XFERCOMP) {
+            uint32_t left = mmio_read(HCTSIZ(1)) & 0x7FFFF;
+            mmio_write(HCINT(1), 0xFFFFFFFF);
+            rx_armed = 0;
+            int got = XFER_MAX - (int)left;
+            if (got < 0) got = 0;
+            int packets = (got + maxp - 1) / maxp;
+            if (packets == 0) packets = 1;
+            *t ^= (uint8_t)(packets & 1);
+            if (got > max) got = max;
+            memcpy(data, rx_dma, (size_t)got);
+            return got;
+        }
+        if (s & (HCINT_STALL | HCINT_XACTERR)) {
+            mmio_write(HCINT(1), 0xFFFFFFFF);
+            rx_armed = 0;
+            return -1;
+        }
+        if (s & HCINT_CHHLTD) {                 /* NAK: the device had nothing; ask again next time */
+            mmio_write(HCINT(1), 0xFFFFFFFF);
+            rx_armed = 0;
+        }
+        return 0;
+    }
+
+    mmio_write(HCINT(1), 0xFFFFFFFF);
+    uint32_t chr = ((uint32_t)maxp & 0x7FF)
+                 | ((uint32_t)(ep & 0xF) << 11)
+                 | (1u << 15)                             /* IN */
+                 | ((dev->speed == 2) ? (1u << 17) : 0)
+                 | ((uint32_t)EP_BULK << 18)
+                 | (1u << 20)
+                 | ((uint32_t)(dev->address & 0x7F) << 22);
+    int packets = XFER_MAX / maxp;
+    mmio_write(HCTSIZ(1), ((uint32_t)(*t ? 2 : 0) << 29) | ((uint32_t)packets << 19) | (uint32_t)XFER_MAX);
+    mmio_write(HCDMA(1), USB_BUS(rx_dma));
+    mmio_write(HCCHAR(1), chr | HCCHAR_ENA);
+    rx_armed = 1;
+    rx_dev = dev;
+    rx_ep = ep;
+    return 0;
 }
 
 /* ---- hubs ----

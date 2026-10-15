@@ -1,5 +1,5 @@
-#ifndef ARM_NET_H
-#define ARM_NET_H
+#ifndef ARM_ETHDEV_H
+#define ARM_ETHDEV_H
 
 #include <stdint.h>
 

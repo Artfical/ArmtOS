@@ -26,6 +26,14 @@ MPFLAGS := -ffreestanding -nostdlib -nostartfiles -nodefaultlibs -fno-builtin \
            -I. -I$(ARCH_DIR) -Ikernel/micropython -Ikernel/micropython/ports/tos \
            -Ikernel/micropython/ports/armtos -Ikernel/micropython/genhdr
 
+# The network stack is the x86 kernel's, compiled as it is. compat/ comes first so that the few
+# kernel services it includes (clock, terminal, klog, serial, scheduler) resolve to the board's
+# versions; -Werror is off because this is code written for another target.
+NETFLAGS := -ffreestanding -nostdlib -nostartfiles -nodefaultlibs -fno-builtin \
+            -fno-stack-protector -fno-pic -fno-pie -mgeneral-regs-only -O2 -Wall -MMD -MP \
+            -Wno-unused-function -Wno-unused-variable -Wno-unused-but-set-variable \
+            -I$(ARCH_DIR)/compat -Ikernel/net -Ikernel/lib -Ikernel/core -I. -I$(ARCH_DIR)
+
 ASFLAGS := $(CFLAGS)
 
 OBJS := $(ARCH_DIR)/boot.arm.o \
@@ -52,6 +60,7 @@ OBJS := $(ARCH_DIR)/boot.arm.o \
         $(ARCH_DIR)/net.arm.o \
         $(ARCH_DIR)/genet.arm.o \
         $(ARCH_DIR)/lan95xx.arm.o \
+        $(ARCH_DIR)/usbnet.arm.o \
         $(ARCH_DIR)/main.arm.o
 
 MP_CORE := $(patsubst %.c,%.arm.o,$(filter-out %/persistentcode.c,$(wildcard kernel/micropython/py/*.c)))
@@ -62,6 +71,15 @@ MP_PORT := kernel/micropython/ports/tos/math_stubs.arm.o \
            kernel/micropython/shared/runtime/pyexec.arm.o \
            kernel/micropython/shared/runtime/sys_stdio_mphal.arm.o \
            kernel/micropython/shared/readline/readline.arm.o
+
+# Everything in kernel/net/ except the PCI/port-I/O NIC drivers, the x86 probe and the x86
+# entropy source, which arch/arm64/{nic_arm,csprng_arm,usbnet}.c replace.
+NET_EXCLUDE := nic.c csprng.c e1000.c ne2000.c pcnet.c rtl8139.c virtio_net.c
+NET_SRCS := $(filter-out $(addprefix kernel/net/,$(NET_EXCLUDE)),$(wildcard kernel/net/*.c))
+NET_OBJS := $(NET_SRCS:.c=.arm.o)
+OBJS += $(NET_OBJS) \
+        $(ARCH_DIR)/netcompat.arm.o $(ARCH_DIR)/csprng_arm.arm.o $(ARCH_DIR)/nic_arm.arm.o \
+        $(ARCH_DIR)/netcmd.arm.o
 
 OBJS += $(MP_CORE) $(MP_PORT)
 
@@ -80,6 +98,16 @@ kernel/micropython/ports/armtos/%.arm.o: kernel/micropython/ports/armtos/%.c
 
 kernel/micropython/ports/tos/%.arm.o: kernel/micropython/ports/tos/%.c
 	$(CC) $(MPFLAGS) -c $< -o $@
+
+kernel/net/%.arm.o: kernel/net/%.c
+	$(CC) $(NETFLAGS) -c $< -o $@
+
+$(ARCH_DIR)/netcompat.arm.o $(ARCH_DIR)/csprng_arm.arm.o $(ARCH_DIR)/nic_arm.arm.o: $(ARCH_DIR)/%.arm.o: $(ARCH_DIR)/%.c
+	$(CC) $(NETFLAGS) -c $< -o $@
+
+# the shell glue includes both this directory's headers and the stack's, so this directory wins
+$(ARCH_DIR)/netcmd.arm.o: $(ARCH_DIR)/netcmd.c
+	$(CC) $(filter-out -I$(ARCH_DIR) -I$(ARCH_DIR)/compat,$(NETFLAGS)) -I$(ARCH_DIR)/compat -I$(ARCH_DIR) -Ikernel/net -c $< -o $@
 
 %.arm.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@

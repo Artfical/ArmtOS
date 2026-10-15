@@ -59,6 +59,25 @@ jobs:
           grep -q "2 device(s)"                 boot.log
           grep -q "py Raspberry Pi"              boot.log
 
+      - name: Network smoke test
+        # The x86 kernel's TCP/IP stack runs on the board. QEMU's user-mode network gives the
+        # emulated Pi a USB Ethernet adapter; DHCP, ARP, ICMP and a WebSocket echo to the host
+        # must all work. (The full internet run -- DNS, HTTPS, SNTP -- is tools/test/nettest.sh,
+        # kept out of CI so a flaky outside site cannot block a release.)
+        run: |
+          python3 tools/test/wsecho.py 18080 &
+          sleep 1
+          truncate -s 64M net.img
+          ( sleep 8; printf 'nettest local 18080\n'; sleep 25 ) | \
+            timeout 80 qemu-system-aarch64 -M raspi3b -kernel kernel8.img \
+              -serial stdio -display none -drive file=net.img,if=sd,format=raw \
+              -device usb-net,netdev=n0 -netdev user,id=n0 > net.log 2>&1 || true
+          cat net.log
+          grep -q "PASS  dhcp"       net.log
+          grep -q "PASS  arp+icmp"   net.log
+          grep -q "PASS  websocket"  net.log
+          grep -q " 0 failed"        net.log
+
       - name: Build the card image
         run: |
           SHORT=$(git rev-parse --short HEAD)

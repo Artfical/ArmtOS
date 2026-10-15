@@ -13,9 +13,11 @@
 #include "fat.h"
 #include "loader.h"
 #include "heap.h"
-#include "net.h"
+#include "ethdev.h"
 #include "armpy.h"
 #include "version.h"
+
+int net_command(int argc, char **argv);
 
 /* What the firmware hands over, printed so a serial console shows the port is alive and
  * the board was identified before anything harder is attempted. */
@@ -152,6 +154,13 @@ void shell(void)
             uart_puts("ls              list the programs on the card\n");
             uart_puts("run NAME.t      run a program from the card\n");
             uart_puts("eth             bring the Ethernet up and show its address\n");
+            uart_puts("net             start the network stack (DHCP) and show its state\n");
+            uart_puts("ping H          ICMP echo to a host name or address\n");
+            uart_puts("dns H           resolve a host name\n");
+            uart_puts("ntp [H]         set the clock over SNTP\n");
+            uart_puts("wget H [PATH]   HTTP GET     (https H [PATH] for TLS)\n");
+            uart_puts("ws H PORT PATH  WebSocket echo test\n");
+            uart_puts("nettest         exercise every layer, one PASS/FAIL line each\n");
             uart_puts("py STATEMENT    run one line of Python\n");
             uart_puts("python          the Python prompt (Ctrl-D to leave)\n");
             uart_puts("reboot          restart the board\n");
@@ -328,6 +337,8 @@ void shell(void)
             mmio_write(bcm_periph_base + 0x10001c, 0x5A000020 | 1);
             mmio_write(bcm_periph_base + 0x100024, 0x5A000000 | (1 << 5));
             for (;;) __asm__ volatile("wfe");
+        } else if (net_command(argc, argv)) {
+            /* handled by netcmd.c */
         } else {
             uart_puts("unknown command: ");
             uart_puts(argv[0]);

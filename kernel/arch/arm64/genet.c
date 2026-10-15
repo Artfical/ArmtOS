@@ -1,4 +1,4 @@
-#include "net.h"
+#include "ethdev.h"
 #include "bcm.h"
 #include "dma.h"
 #include "mailbox.h"

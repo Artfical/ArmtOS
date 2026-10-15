@@ -1,4 +1,4 @@
-#include "net.h"
+#include "ethdev.h"
 #include "bcm.h"
 #include "uart.h"
 #include "dwc2.h"
@@ -6,6 +6,8 @@
 
 extern eth_driver_t genet_driver;
 extern eth_driver_t lan95xx_driver;
+extern eth_driver_t usbnet_driver;
+void usbnet_publish_mac(uint8_t *out);
 void genet_publish_mac(uint8_t *out);
 void lan95xx_publish_mac(uint8_t *out);
 
@@ -14,7 +16,7 @@ static uint8_t mac[6];
 
 int eth_init(void)
 {
-    active = 0;
+    if (active) return 0;                         /* already up */
 
     /* The Pi 5's Ethernet is in the RP1 chip across PCIe, and its USB host is there too.
      * Poking the addresses the other boards use would write into nothing, or into something
@@ -36,6 +38,9 @@ int eth_init(void)
             if (lan95xx_driver.start() == 0) {
                 active = &lan95xx_driver;
                 lan95xx_publish_mac(mac);
+            } else if (usbnet_driver.start() == 0) {
+                active = &usbnet_driver;
+                usbnet_publish_mac(mac);
             }
         }
     }

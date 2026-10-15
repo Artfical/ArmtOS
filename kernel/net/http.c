@@ -104,14 +104,20 @@ int http_dechunk(uint8_t *r, int total)
         }
         if (digits == 0) return HTTP_ERR_HEADER;
         while (in < total && r[in] != '\n') in++;       /* skip chunk extensions */
-        if (in >= total) return HTTP_ERR_HEADER;
+        /* The caller's buffer may have filled up mid-body (a big page): what was received is
+         * still a valid prefix, so a cut-off chunk returns that prefix instead of failing. */
+        if (in >= total) return out;
         in++;
         if (sz == 0) return out;
-        if (sz > total - in) return HTTP_ERR_HEADER;   /* truncated chunk */
+        if (sz > total - in) {
+            memmove(r + out, r + in, (size_t)(total - in));
+            return out + (total - in);
+        }
         memmove(r + out, r + in, (size_t)sz);
         out += (int)sz;
         in += (int)sz;
         if (in + 1 < total && r[in] == '\r' && r[in + 1] == '\n') in += 2;
+        else if (in + 1 >= total) return out;              /* cut off before the chunk's CRLF */
         else return HTTP_ERR_HEADER;
     }
 }

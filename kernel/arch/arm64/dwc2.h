@@ -34,4 +34,15 @@ int  usb_control(usb_device_t *dev, uint8_t rtype, uint8_t req, uint16_t value,
 /* One bulk transfer; `ep` carries the direction bit as the descriptor reports it. */
 int  usb_bulk(usb_device_t *dev, uint8_t ep, void *data, int len);
 
+/* A receive that never blocks: 0 when nothing has arrived, the byte count when something has,
+ * -1 on an error. One transfer stays armed between calls. */
+int  usb_bulk_in_poll(usb_device_t *dev, uint8_t ep, void *data, int max);
+
+/* Descriptor helpers for class drivers: the device's full configuration descriptor, and a
+ * string descriptor decoded to ASCII. */
+int  usb_get_config(usb_device_t *dev, int index, uint8_t *buf, int max);
+int  usb_get_string(usb_device_t *dev, int index, char *out, int max);
+int  usb_set_config(usb_device_t *dev, int value);
+int  usb_set_interface(usb_device_t *dev, int iface, int alt);
+
 #endif

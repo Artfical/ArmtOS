@@ -1,4 +1,4 @@
-#include "net.h"
+#include "ethdev.h"
 #include "dwc2.h"
 #include "uart.h"
 #include "irq.h"
@@ -104,7 +104,7 @@ static int lan_recv(uint8_t *frame, int max)
 {
     if (!started) return 0;
     static uint8_t in[ETH_MTU + 8] __attribute__((aligned(8)));
-    int n = usb_bulk(dev, ep_in, in, (int)sizeof(in));
+    int n = usb_bulk_in_poll(dev, ep_in, in, (int)sizeof(in));
     if (n <= 8) return 0;
     /* A four-byte status word leads each frame; the length lives in its upper bits. */
     uint32_t status;
