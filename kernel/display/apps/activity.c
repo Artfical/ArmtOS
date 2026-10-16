@@ -96,7 +96,7 @@ static void act_draw(uiapp_t *ap, gfx_surface_t *s, int x, int y, int w, int h)
     int rows = (h - (ty - y) - 56 - 40) / 26;
     for (int r = 0; r < rows && a->scroll + r < a->n; r++) {
         int i = a->scroll + r, ry = ty + 38 + r * 26;
-        if (i == a->sel) gfx_rrect(s, x + 18, ry - 3, w - 36, 25, 6, 0x2E4A7A, 255);
+        if (i == a->sel) gfx_rrect(s, x + 18, ry - 3, w - 36, 25, 6, UI_SELECT, 255);
         char t[16] = "";
         ui_num(t, a->t[i].pid);
         gfx_text(s, &ui_font_regular, x + 28, ry, t, UI_TEXT, 255);
@@ -112,7 +112,7 @@ static void act_draw(uiapp_t *ap, gfx_surface_t *s, int x, int y, int w, int h)
     }
     int by = y + h - 46;
     ui_button(s, x + w - 152, by, 140, 32, a->confirm ? "Really end it?" : "End Task", a->sel >= 0 ? 0x7F1D1D : UI_CARD2,
-              a->sel >= 0 ? 0xFCA5A5 : 0x5C5F6A, 0);
+              a->sel >= 0 ? 0xFCA5A5 : UI_DIM, 0);
     char inf[64] = "";
     ui_num(inf, a->n); strcat(inf, " tasks");
     if (a->msg[0]) { strcat(inf, "   "); strcat(inf, a->msg); }

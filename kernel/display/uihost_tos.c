@@ -136,3 +136,64 @@ void uihost_net(uihost_net_t *n)
 int uihost_net_start(void) { return nic_send ? 0 : -1; }    /* tOS brings the network up at boot */
 
 const char *uihost_system_name(void) { return "tOS"; }
+
+const char *uihost_hostname(void) { return auth_hostname(); }
+
+/* /etc/passwd: name:x:uid:gid:gecos:home:shell */
+int uihost_users(uihost_user_t *out, int max)
+{
+    uint8_t *d; uint32_t n;
+    if (uihost_read("/etc/passwd", &d, &n) != 0) return 0;
+    uint32_t sess_uid, sess_gid;
+    auth_session(&sess_uid, &sess_gid);
+    int count = 0;
+    char *p = (char *)d, *end = p + n;
+    while (p < end && count < max) {
+        char *line = p;
+        while (p < end && *p != '\n') p++;
+        if (p < end) *p++ = 0; else *end = 0;
+        char *f[7];
+        int k = 0;
+        f[k++] = line;
+        for (char *q = line; *q && k < 7; q++) if (*q == ':') { *q = 0; f[k++] = q + 1; }
+        if (k < 5) continue;
+        uint32_t uid = 0;
+        for (char *q = f[2]; *q >= '0' && *q <= '9'; q++) uid = uid * 10 + (uint32_t)(*q - '0');
+        if (uid != 0 && uid < 1000) continue;             /* system accounts */
+        strncpy(out[count].name, f[0], sizeof(out[count].name) - 1);
+        out[count].name[sizeof(out[count].name) - 1] = 0;
+        strncpy(out[count].full, f[4][0] ? f[4] : f[0], sizeof(out[count].full) - 1);
+        out[count].full[sizeof(out[count].full) - 1] = 0;
+        out[count].uid = uid;
+        out[count].admin = uid == 0 || auth_can_sudo(uid);
+        out[count].current = uid == sess_uid;
+        count++;
+    }
+    free(d);
+    return count;
+}
+
+int wm_gfx_take_authorization(void);
+
+int uihost_add_user(const char *name, const char *password, const char *full, int admin)
+{
+    if (!wm_gfx_take_authorization()) return -1;
+    auth_saved_t saved;
+    auth_become(0, 0, &saved);
+    uint32_t uid;
+    int r = auth_add_user(name, password, full, admin, &uid);
+    if (r == 0) auth_save();
+    auth_restore(&saved);
+    return r;
+}
+
+int uihost_set_password(const char *name, const char *password)
+{
+    if (!wm_gfx_take_authorization()) return -1;
+    auth_saved_t saved;
+    auth_become(0, 0, &saved);
+    int r = auth_set_password(name, password);
+    if (r == 0) auth_save();
+    auth_restore(&saved);
+    return r;
+}

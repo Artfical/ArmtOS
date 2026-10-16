@@ -2,13 +2,31 @@
 #include "string.h"
 
 extern const uiapp_class_t app_calculator, app_clock, app_2048, app_notepad, app_files, app_viewer,
-                           app_activity, app_network, app_paint, app_notes;
+                           app_activity, app_network, app_paint, app_notes, app_settings;
 
 const uiapp_class_t *const uiapp_classes[] = {
     &app_files, &app_notepad, &app_calculator, &app_paint, &app_viewer, &app_activity, &app_network,
-    &app_clock, &app_notes, &app_2048,
+    &app_clock, &app_notes, &app_2048, &app_settings,
 };
 const int uiapp_class_count = (int)(sizeof(uiapp_classes) / sizeof(uiapp_classes[0]));
+
+static const ui_theme_t dark_theme = {
+    1, 0x1E1F25, 0x2A2B33, 0x33343D, 0x3A3C46, 0xF2F3F5, 0xA1A4AE,
+    0x202127, 0x26272E, 0x24252C, 0x1A1B20, 0x2E4A7A,
+    0x2C2E37, 0x24252C, 0xF2F3F5, 0x26272E, 0x101015, 120, 0xF2F3F5,
+};
+static const ui_theme_t light_theme = {
+    0, 0xFFFFFF, 0xF2F2F5, 0xE6E6EB, 0xD9D9DE, 0x1D1D1F, 0x6E6E73,
+    0xECECF0, 0xF6F6F8, 0xF2F2F4, 0xFFFFFF, 0xCFE0FC,
+    0xE8E8EC, 0xF5F5F7, 0x2B2B2E, 0xF4F4F6, 0xF5F5F7, 170, 0x1D1D1F,
+};
+ui_theme_t ui_theme = {
+    1, 0x1E1F25, 0x2A2B33, 0x33343D, 0x3A3C46, 0xF2F3F5, 0xA1A4AE,
+    0x202127, 0x26272E, 0x24252C, 0x1A1B20, 0x2E4A7A,
+    0x2C2E37, 0x24252C, 0xF2F3F5, 0x26272E, 0x101015, 120, 0xF2F3F5,
+};
+
+void ui_set_dark(int dark) { ui_theme = dark ? dark_theme : light_theme; }
 
 const uiapp_class_t *uiapp_find(const char *id)
 {
@@ -72,6 +90,9 @@ static void dlg_load(ui_filedlg_t *d)
 {
     d->n = uihost_list(d->dir, d->ents, 96);
     if (d->n < 0) d->n = 0;
+    int keep = 0;                                  /* hide dot files */
+    for (int i = 0; i < d->n; i++) if (d->ents[i].name[0] != '.') d->ents[keep++] = d->ents[i];
+    d->n = keep;
     /* folders first, then files, each alphabetically */
     for (int i = 1; i < d->n; i++) {
         uihost_entry_t t = d->ents[i];
@@ -116,7 +137,7 @@ void ui_filedlg_draw(ui_filedlg_t *d, gfx_surface_t *s, int x, int y, int w, int
     dlg_frame(w, h, &dx, &dy);
     dx += x; dy += y;
     gfx_shadow(s, dx, dy, DLG_W, DLG_H, 220);
-    gfx_rrect(s, dx, dy, DLG_W, DLG_H, 12, 0x26272E, 255);
+    gfx_rrect(s, dx, dy, DLG_W, DLG_H, 12, UI_TOOLBAR, 255);
     gfx_text(s, &ui_font_medium, dx + 18, dy + 14, d->saving ? "Save As" : "Open", UI_TEXT, 255);
     /* the folder, with an "up" button */
     ui_button(s, dx + 18, dy + 42, 34, 26, "\xE2\x86\x90", UI_CARD2, UI_TEXT, 0);
@@ -125,7 +146,7 @@ void ui_filedlg_draw(ui_filedlg_t *d, gfx_surface_t *s, int x, int y, int w, int
     gfx_text(&t, &ui_font_regular, dx + 62, dy + 46, d->dir, UI_DIM, 255);
     /* the listing */
     int ly = dy + 78, rows = (DLG_H - 78 - 96) / DLG_ROW;
-    gfx_rrect(s, dx + 18, ly, DLG_W - 36, rows * DLG_ROW + 8, 8, 0x1C1D22, 255);
+    gfx_rrect(s, dx + 18, ly, DLG_W - 36, rows * DLG_ROW + 8, 8, UI_FIELD, 255);
     for (int i = 0; i < rows && d->scroll + i < d->n; i++) {
         uihost_entry_t *e = &d->ents[d->scroll + i];
         int ry = ly + 4 + i * DLG_ROW;
@@ -142,7 +163,7 @@ void ui_filedlg_draw(ui_filedlg_t *d, gfx_surface_t *s, int x, int y, int w, int
     /* the name field and buttons */
     int fy = dy + DLG_H - 84;
     gfx_text(s, &ui_font_small, dx + 18, fy + 6, "Name", UI_DIM, 255);
-    gfx_rrect(s, dx + 64, fy, DLG_W - 82, 30, 7, 0x1C1D22, 255);
+    gfx_rrect(s, dx + 64, fy, DLG_W - 82, 30, 7, UI_FIELD, 255);
     gfx_rrect_outline(s, dx + 64, fy, DLG_W - 82, 30, 7, UI_ACCENT, 200);
     int tw = gfx_text(s, &ui_font_regular, dx + 74, fy + 6, d->name, UI_TEXT, 255);
     gfx_fill(s, dx + 75 + tw, fy + 6, 2, 18, UI_ACCENT);

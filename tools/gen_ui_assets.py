@@ -231,8 +231,89 @@ for name, glyph, c1, c2 in APPS:
     add_image('icon48_' + name, app_icon(48, glyph, c1, c2))
     add_image('icon20_' + name, app_icon(20, glyph, c1, c2))
 
+# Finder-style document icons: a blue folder, and a page with a folded corner and a coloured tag
+def folder_icon(size):
+    S = size * 4
+    im = Image.new('RGBA', (S, S), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    top = int(S * 0.22)
+    # the tab and the back sheet
+    d.rounded_rectangle([int(S * 0.06), top - int(S * 0.08), int(S * 0.44), top + int(S * 0.1)], radius=int(S * 0.05), fill=(84, 160, 238, 255))
+    d.rounded_rectangle([int(S * 0.06), top, int(S * 0.94), int(S * 0.86)], radius=int(S * 0.07), fill=(84, 160, 238, 255))
+    # the front, a lighter gradient
+    front = Image.new('RGBA', (S, S), (0, 0, 0, 0))
+    g = ImageDraw.Draw(front)
+    for y in range(int(S * 0.32), int(S * 0.86)):
+        t = (y - S * 0.32) / (S * 0.54)
+        g.line([(0, y), (S, y)], fill=(int(130 - 30 * t), int(196 - 22 * t), int(255 - 10 * t), 255))
+    mask = Image.new('L', (S, S), 0)
+    ImageDraw.Draw(mask).rounded_rectangle([int(S * 0.06), int(S * 0.32), int(S * 0.94), int(S * 0.86)], radius=int(S * 0.07), fill=255)
+    im = Image.composite(front, im, mask)
+    ImageDraw.Draw(im).line([(int(S * 0.1), int(S * 0.335)), (int(S * 0.9), int(S * 0.335))], fill=(200, 230, 255, 255), width=max(1, S // 64))
+    return im.resize((size, size), Image.LANCZOS)
+
+def doc_icon(size, label, color):
+    S = size * 4
+    im = Image.new('RGBA', (S, S), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    x0, x1, y0, y1, fold = int(S * 0.2), int(S * 0.8), int(S * 0.06), int(S * 0.94), int(S * 0.2)
+    sh = Image.new('L', (S, S), 0)
+    ImageDraw.Draw(sh).polygon([(x0, y0 + 6), (x1 - fold, y0 + 6), (x1, y0 + fold + 6), (x1, y1 + 6), (x0, y1 + 6)], fill=60)
+    sh = sh.filter(ImageFilter.GaussianBlur(S * 0.02))
+    im = Image.composite(Image.new('RGBA', (S, S), (0, 0, 0, 255)), im, sh)
+    d = ImageDraw.Draw(im)
+    d.polygon([(x0, y0), (x1 - fold, y0), (x1, y0 + fold), (x1, y1), (x0, y1)], fill=(252, 252, 253, 255), outline=(200, 202, 208, 255))
+    d.polygon([(x1 - fold, y0), (x1, y0 + fold), (x1 - fold, y0 + fold)], fill=(222, 224, 230, 255), outline=(200, 202, 208, 255))
+    for i in range(5):
+        yy = int(S * 0.34) + i * int(S * 0.07)
+        d.line([(x0 + int(S * 0.08), yy), (x1 - int(S * 0.08), yy)], fill=(214, 216, 222, 255), width=max(1, S // 90))
+    if label:
+        f = ImageFont.truetype(os.path.join(UI, 'Inter-Bold.ttf'), int(S * 0.15))
+        bw = int(S * 0.5)
+        d.rounded_rectangle([S // 2 - bw // 2, int(S * 0.66), S // 2 + bw // 2, int(S * 0.84)], radius=int(S * 0.04), fill=color + (255,))
+        d.text((S // 2, int(S * 0.75)), label, font=f, fill=(255, 255, 255, 255), anchor='mm')
+    return im.resize((size, size), Image.LANCZOS)
+
+for sz in (64, 20):
+    add_image(f'doc{sz}_folder', folder_icon(sz))
+    for key, label, col in [('text', 'TXT', (120, 124, 134)), ('image', 'IMG', (52, 168, 90)), ('pdf', 'PDF', (220, 60, 50)),
+                            ('audio', 'AUD', (220, 50, 110)), ('app', 'APP', (60, 110, 230)), ('generic', '', (0, 0, 0))]:
+        add_image(f'doc{sz}_{key}', doc_icon(sz, label if sz > 32 else '', col))
+
+# the padlock of the password dialog: a steel shackle over a golden body, like macOS's
+def padlock(size):
+    S = size * 4
+    im = Image.new('RGBA', (S, S), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    cx = S // 2
+    sw = int(S * 0.11)
+    # shackle: an arch of steel
+    d.arc([int(S * 0.22), int(S * 0.04), int(S * 0.78), int(S * 0.62)], 180, 360, fill=(150, 154, 162, 255), width=sw)
+    d.line([(int(S * 0.22) + sw // 2, int(S * 0.33)), (int(S * 0.22) + sw // 2, int(S * 0.5))], fill=(150, 154, 162, 255), width=sw)
+    d.line([(int(S * 0.78) - sw // 2, int(S * 0.33)), (int(S * 0.78) - sw // 2, int(S * 0.5))], fill=(150, 154, 162, 255), width=sw)
+    d.arc([int(S * 0.25), int(S * 0.07), int(S * 0.75), int(S * 0.59)], 200, 330, fill=(215, 218, 224, 255), width=sw // 3)
+    # body: golden, lighter at the top, with a soft shadow below
+    sh = Image.new('L', (S, S), 0)
+    ImageDraw.Draw(sh).rounded_rectangle([int(S * 0.1), int(S * 0.44), int(S * 0.9), int(S * 0.97)], radius=int(S * 0.1), fill=90)
+    sh = sh.filter(ImageFilter.GaussianBlur(S * 0.03))
+    im = Image.composite(Image.new('RGBA', (S, S), (0, 0, 0, 255)), im, sh)
+    body = Image.new('RGBA', (S, S), (0, 0, 0, 0))
+    bd = ImageDraw.Draw(body)
+    for y in range(int(S * 0.42), int(S * 0.94)):
+        t = (y - S * 0.42) / (S * 0.52)
+        bd.line([(0, y), (S, y)], fill=(int(250 - 30 * t), int(204 - 60 * t), int(92 - 50 * t), 255))
+    mask = Image.new('L', (S, S), 0)
+    ImageDraw.Draw(mask).rounded_rectangle([int(S * 0.1), int(S * 0.42), int(S * 0.9), int(S * 0.94)], radius=int(S * 0.1), fill=255)
+    im = Image.composite(body, im, mask)
+    d = ImageDraw.Draw(im)
+    d.rounded_rectangle([int(S * 0.1), int(S * 0.42), int(S * 0.9), int(S * 0.94)], radius=int(S * 0.1), outline=(196, 132, 40, 255), width=max(2, S // 70))
+    d.line([(int(S * 0.16), int(S * 0.46)), (int(S * 0.84), int(S * 0.46))], fill=(255, 232, 160, 255), width=max(2, S // 60))
+    return im.resize((size, size), Image.LANCZOS)
+
+add_image('padlock', padlock(80))
+
 # small monochrome glyphs for the top bar and window buttons (white on transparent)
-for g in ['ethernet-port', 'wifi', 'volume-2', 'battery-full', 'search', 'power', 'bell', 'x', 'minus', 'maximize-2', 'house', 'monitor', 'cpu', 'chevron-right']:
+for g in ['ethernet-port', 'sun', 'moon', 'user', 'users', 'mouse-pointer', 'layout-panel-top', 'image', 'info', 'lock', 'list', 'layout-grid', 'chevron-left', 'folder', 'hard-drive', 'download', 'file-text', 'wifi', 'volume-2', 'battery-full', 'search', 'power', 'bell', 'x', 'minus', 'maximize-2', 'house', 'monitor', 'cpu', 'chevron-right']:
     S = 64
     f = ImageFont.truetype(lucide_path, 52)
     im = Image.new('L', (S, S), 0)

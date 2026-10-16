@@ -55,13 +55,35 @@ extern const uiapp_class_t *const uiapp_classes[];
 extern const int uiapp_class_count;
 const uiapp_class_t *uiapp_find(const char *id);
 
-/* helpers the apps share: the desktop's look, in one place */
-#define UI_BG       0x1E1F25
-#define UI_CARD     0x2A2B33
-#define UI_CARD2    0x33343D
-#define UI_LINE     0x3A3C46
-#define UI_TEXT     0xF2F3F5
-#define UI_DIM      0xA1A4AE
+/* The desktop's look, in one place: light or dark, switched in Settings. */
+typedef struct {
+    int dark;
+    uint32_t bg;          /* window content */
+    uint32_t card, card2; /* grouped boxes, buttons */
+    uint32_t line;        /* separators */
+    uint32_t text, dim;
+    uint32_t sidebar, toolbar, status;
+    uint32_t field;       /* text fields, list backgrounds */
+    uint32_t select;      /* selected item background */
+    uint32_t title_on, title_off, title_text;
+    uint32_t menu;
+    uint32_t bar_tint; int bar_alpha;   /* the top bar's glass */
+    uint32_t bar_text;
+} ui_theme_t;
+extern ui_theme_t ui_theme;
+void ui_set_dark(int dark);
+
+#define UI_BG       (ui_theme.bg)
+#define UI_CARD     (ui_theme.card)
+#define UI_CARD2    (ui_theme.card2)
+#define UI_LINE     (ui_theme.line)
+#define UI_TEXT     (ui_theme.text)
+#define UI_DIM      (ui_theme.dim)
+#define UI_SIDEBAR  (ui_theme.sidebar)
+#define UI_TOOLBAR  (ui_theme.toolbar)
+#define UI_STATUS   (ui_theme.status)
+#define UI_FIELD    (ui_theme.field)
+#define UI_SELECT   (ui_theme.select)
 #define UI_ACCENT   0x3B82F6
 #define UI_GREEN    0x22C55E
 #define UI_RED      0xEF4444

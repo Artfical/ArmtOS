@@ -85,7 +85,7 @@ static void n_init(uiapp_t *a, const char *arg) { (void)arg; notes_t *n = a->st;
 static void n_draw(uiapp_t *a, gfx_surface_t *s, int x, int y, int w, int h)
 {
     notes_t *n = a->st;
-    gfx_fill(s, x, y, w, h, 0x2B2A27);
+    gfx_fill(s, x, y, w, h, UI_BG);
     gfx_text(s, &ui_font_title, x + 16, y + 12, "Notes", UI_TEXT, 255);
     ui_button(s, x + w - 56, y + 12, 40, 30, "+", UI_CARD2, UI_TEXT, 0);
     for (int i = 0; i < n->n; i++) {

@@ -130,7 +130,7 @@ static void np_draw(uiapp_t *a, gfx_surface_t *s, int x, int y, int w, int h)
 {
     np_t *n = a->st;
     set_title(a, n);
-    gfx_fill(s, x, y, w, BAR_H, 0x24252C);
+    gfx_fill(s, x, y, w, BAR_H, UI_TOOLBAR);
     gfx_hline(s, x, y + BAR_H - 1, w, 0x000000, 120);
     static const char *const tb[3] = { "New", "Open", "Save" };
     for (int i = 0; i < 3; i++) ui_button(s, x + 10 + i * 78, y + 8, 70, 28, tb[i], UI_CARD2, UI_TEXT, 0);
@@ -139,8 +139,8 @@ static void np_draw(uiapp_t *a, gfx_surface_t *s, int x, int y, int w, int h)
     gfx_text(&t, &ui_font_regular, x + 262, y + 13, n->path[0] ? n->path : "Not saved yet", UI_DIM, 255);
 
     int ty = y + BAR_H, th = h - BAR_H - STATUS_H;
-    gfx_fill(s, x, ty, GUTTER, th, 0x1A1B20);
-    gfx_fill(s, x + GUTTER, ty, w - GUTTER, th, 0x1E1F25);
+    gfx_fill(s, x, ty, GUTTER, th, UI_SIDEBAR);
+    gfx_fill(s, x + GUTTER, ty, w - GUTTER, th, UI_BG);
     int rows = (th - 8) / UI_CELL_H, cols = (w - GUTTER - TX * 2) / UI_CELL_W;
     if (cols < 1) cols = 1;
     keep_visible(n, rows, cols);
@@ -154,16 +154,16 @@ static void np_draw(uiapp_t *a, gfx_surface_t *s, int x, int y, int w, int h)
     int total = count_lines(n);
     for (int r = 0; r < rows && line < total; r++) {
         int ly = ty + 4 + r * UI_CELL_H;
-        if (line == cl) gfx_fill(&tc, x + GUTTER, ly, w - GUTTER, UI_CELL_H, 0x24252D);
+        if (line == cl) gfx_fill(&tc, x + GUTTER, ly, w - GUTTER, UI_CELL_H, UI_CARD);
         char num[12] = "";
         ui_num(num, line + 1);
-        gfx_text(s, &ui_font_small, x + GUTTER - 10 - gfx_text_width(&ui_font_small, num), ly + 2, num, line == cl ? UI_TEXT : 0x5C5F6A, 255);
+        gfx_text(s, &ui_font_small, x + GUTTER - 10 - gfx_text_width(&ui_font_small, num), ly + 2, num, line == cl ? UI_TEXT : UI_DIM, 255);
         int col = 0;
         while (pos < n->len && n->buf[pos] != '\n') {
             if (col >= n->left && col < n->left + cols) {
                 uint8_t ch = (uint8_t)n->buf[pos];
-                gfx_cell(&tc, x + GUTTER + TX + (col - n->left) * UI_CELL_W, ly, ch < 32 ? ' ' : ch, 0xE5E7EB,
-                         line == cl ? 0x24252D : 0x1E1F25);
+                gfx_cell(&tc, x + GUTTER + TX + (col - n->left) * UI_CELL_W, ly, ch < 32 ? ' ' : ch, UI_TEXT,
+                         line == cl ? UI_CARD : UI_BG);
             }
             col++; pos++;
         }
@@ -174,7 +174,7 @@ static void np_draw(uiapp_t *a, gfx_surface_t *s, int x, int y, int w, int h)
     }
 
     int sy = y + h - STATUS_H;
-    gfx_fill(s, x, sy, w, STATUS_H, 0x24252C);
+    gfx_fill(s, x, sy, w, STATUS_H, UI_TOOLBAR);
     char st[96] = "Ln ";
     ui_num(st, cl + 1); strcat(st, ", Col "); ui_num(st, cc + 1);
     strcat(st, "    "); ui_num(st, count_lines(n)); strcat(st, " lines    "); ui_size(st, (uint32_t)n->len);

@@ -173,21 +173,21 @@ void gfx_copy_rect(gfx_surface_t *dst, const gfx_surface_t *src, int x, int y, i
 
 /* ---- images ---- */
 
-static gfx_image_t images[96];
+static gfx_image_t images[160];
 static int images_ready;
 
 const gfx_image_t *gfx_image(const char *name)
 {
     if (!assets) return 0;
     if (!images_ready) {
-        for (int i = 0; i < ui_image_count && i < 96; i++) {
+        for (int i = 0; i < ui_image_count && i < 160; i++) {
             images[i].w = ui_images[i].w;
             images[i].h = ui_images[i].h;
             images[i].rgba = assets + ui_images[i].off;
         }
         images_ready = 1;
     }
-    for (int i = 0; i < ui_image_count && i < 96; i++)
+    for (int i = 0; i < ui_image_count && i < 160; i++)
         if (!strcmp(ui_images[i].name, name)) return &images[i];
     return 0;
 }

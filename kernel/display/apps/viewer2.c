@@ -90,20 +90,20 @@ static void v_close(uiapp_t *a) { drop(a->st); }
 static void v_draw(uiapp_t *a, gfx_surface_t *s, int x, int y, int w, int h)
 {
     viewer_t *v = a->st;
-    gfx_fill(s, x, y, w, BAR_H, 0x24252C);
+    gfx_fill(s, x, y, w, BAR_H, UI_TOOLBAR);
     gfx_hline(s, x, y + BAR_H - 1, w, 0, 120);
     ui_button(s, x + 10, y + 9, 70, 28, "Open", UI_CARD2, UI_TEXT, 0);
     ui_button(s, x + 90, y + 9, 34, 28, "\xE2\x80\x93", UI_CARD2, UI_TEXT, 0);
     ui_button(s, x + 128, y + 9, 50, 28, "Fit", v->zoom == 0 ? UI_ACCENT : UI_CARD2, UI_TEXT, 0);
     ui_button(s, x + 182, y + 9, 34, 28, "+", UI_CARD2, UI_TEXT, 0);
-    ui_button(s, x + w - 150, y + 9, 140, 28, "Set as Wallpaper", UI_CARD2, v->img ? UI_TEXT : 0x5C5F6A, 0);
+    ui_button(s, x + w - 150, y + 9, 140, 28, "Set as Wallpaper", UI_CARD2, v->img ? UI_TEXT : UI_DIM, 0);
     char info[64] = "";
     if (v->img) { ui_num(info, v->iw); strcat(info, " x "); ui_num(info, v->ih); strcat(info, "   "); ui_num(info, v->zoom ? v->zoom : (int)(v->cw * 100 / v->iw)); strcat(info, "%"); }
     gfx_text(s, &ui_font_small, x + 228, y + 15, info, UI_DIM, 255);
 
     int cy = y + BAR_H, chh = h - BAR_H;
     /* a quiet checkerboard, so transparent parts of a picture show as such */
-    gfx_fill(s, x, cy, w, chh, 0x17181C);
+    gfx_fill(s, x, cy, w, chh, UI_SIDEBAR);
     if (v->img) {
         uint32_t tw, th;
         if (v->zoom == 0) {

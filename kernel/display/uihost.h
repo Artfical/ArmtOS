@@ -42,5 +42,23 @@ void uihost_memory(uint32_t *total_kb, uint32_t *used_kb);
 void uihost_net(uihost_net_t *n);
 int  uihost_net_start(void);
 const char *uihost_system_name(void);
+const char *uihost_hostname(void);
+
+/* desktop settings: "dark", "dock_magnify", "mouse_speed", "wallpaper" (0-3), "width", "height";
+ * set also takes "resolution" (an index into 1024x768, 1280x720, 1366x768, 1600x900, 1920x1080) */
+int  uihost_get(const char *key);
+void uihost_set(const char *key, int value);
+
+/* accounts */
+typedef struct { char name[32]; char full[48]; uint32_t uid; int admin; int current; } uihost_user_t;
+int  uihost_users(uihost_user_t *out, int max);
+int  uihost_add_user(const char *name, const char *password, const char *full, int admin);   /* needs authorisation */
+int  uihost_set_password(const char *name, const char *password);                          /* needs authorisation */
+
+/* Asks the person at the desktop for their password (the password dialog), without blocking:
+ * poll uihost_authorized() -- 0 while asking, 1 granted, -1 refused or cancelled. A grant lasts
+ * for one privileged call. */
+void uihost_authorize(const char *reason);
+int  uihost_authorized(void);
 
 #endif

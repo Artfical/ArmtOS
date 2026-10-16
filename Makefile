@@ -202,6 +202,7 @@ KERNEL_OBJS = \
     kernel/display/apps/network.o \
     kernel/display/apps/paint2.o \
     kernel/display/apps/notes.o \
+    kernel/display/apps/settings.o \
     kernel/display/imgload.o \
     kernel/display/jpeg.o \
     kernel/display/notepad.o \

@@ -140,7 +140,7 @@ static void p_draw(uiapp_t *a, gfx_surface_t *s, int x, int y, int w, int h)
 {
     paint_t *p = a->st;
     /* top bar: file buttons, sizes, colour swatches */
-    gfx_fill(s, x, y, w, BAR_H, 0x24252C);
+    gfx_fill(s, x, y, w, BAR_H, UI_TOOLBAR);
     gfx_hline(s, x, y + BAR_H - 1, w, 0, 120);
     ui_button(s, x + 8, y + 9, 54, 28, "New", UI_CARD2, UI_TEXT, 0);
     ui_button(s, x + 66, y + 9, 58, 28, "Open", UI_CARD2, UI_TEXT, 0);
@@ -160,7 +160,7 @@ static void p_draw(uiapp_t *a, gfx_surface_t *s, int x, int y, int w, int h)
     gfx_rrect_outline(s, x + 548, y + 9, 28, 28, 7, 0xFFFFFF, 80);
 
     /* tools on the left */
-    gfx_fill(s, x, y + BAR_H, TOOL_W, h - BAR_H, 0x202127);
+    gfx_fill(s, x, y + BAR_H, TOOL_W, h - BAR_H, UI_SIDEBAR);
     for (int i = 0; i < T_COUNT; i++) {
         int ty = y + BAR_H + 10 + i * 46;
         gfx_rrect(s, x + 6, ty, TOOL_W - 12, 40, 8, p->tool == i ? UI_ACCENT : UI_CARD2, 255);
@@ -169,7 +169,7 @@ static void p_draw(uiapp_t *a, gfx_surface_t *s, int x, int y, int w, int h)
 
     /* the canvas, centred in what is left */
     int ax = x + TOOL_W, aw = w - TOOL_W, ay = y + BAR_H, ah = h - BAR_H - 22;
-    gfx_fill(s, ax, ay, aw, ah + 22, 0x16171B);
+    gfx_fill(s, ax, ay, aw, ah + 22, UI_SIDEBAR);
     p->ox = TOOL_W + (aw - CW_) / 2; p->oy = BAR_H + (ah - CH_) / 2;
     if (p->ox < TOOL_W + 4) p->ox = TOOL_W + 4;
     if (p->oy < BAR_H + 4) p->oy = BAR_H + 4;
