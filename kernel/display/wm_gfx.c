@@ -13,6 +13,11 @@
 #include "fsbridge.h"
 #include "debugmon.h"
 #include "io.h"
+#include "uiapp.h"
+#include "keyboard.h"
+#include "uihost.h"
+#include "imgload.h"
+#include "auth.h"
 
 /*
  * The graphical desktop.
@@ -43,12 +48,12 @@
 #define CPAD_Y      6
 
 /* colours */
-#define C_TEXT       0xF2F3F5
-#define C_TEXT_DIM   0xA1A4AE
+#define C_TEXT       (ui_theme.text)
+#define C_TEXT_DIM   (ui_theme.dim)
 #define C_ACCENT     0x3B82F6
-#define C_TITLE_ON   0x2C2E37
-#define C_TITLE_OFF  0x24252C
-#define C_MENU_BG    0x26272E
+#define C_TITLE_ON   (ui_theme.title_on)
+#define C_TITLE_OFF  (ui_theme.title_off)
+#define C_MENU_BG    (ui_theme.menu)
 
 /* the 16 VGA colours of the character surfaces, redrawn as a modern palette */
 static const uint32_t pal[16] = {
@@ -80,6 +85,7 @@ static int hover_dock = -1, hover_launch = -1, hover_menu = -1, hover_lights;
 static int dock_magnify = 1;
 static int wallpaper_choice;          /* 0 dusk (picture), 1 ocean, 2 graphite */
 static int mouse_speed = 1;
+static int eth_icon_x = -100;          /* where the Ethernet icon is in the top bar: a click opens Network */
 
 /* ------------------------------------------------------------------ apps */
 
@@ -99,7 +105,7 @@ static const app_t apps[] = {
     { "mediaplayer", "Music",         "media",      WIN_KIND_MEDIAPLAYER, 1, 0 },
     { "netmon",      "Network",       "netmon",     WIN_KIND_NETMON,      1, 0 },
     { "taskmgr",     "Activity",      "taskmgr",    WIN_KIND_TASKMGR,     1, 0 },
-    { "@settings",   "Settings",      "settings",   WIN_KIND_PANEL,       1, PANEL_SETTINGS },
+    { "settings",    "System Settings", "settings", WIN_KIND_NATIVE,      1, 0 },
     { "viewer",      "Image Viewer",  "viewer",     WIN_KIND_VIEWER,      0, 0 },
     { "pdf",         "PDF Viewer",    "pdf",        WIN_KIND_PDFVIEWER,   0, 0 },
     { "notes",       "Sticky Notes",  "sticky",     WIN_KIND_STICKYNOTES, 0, 0 },
@@ -114,6 +120,11 @@ static const app_t apps[] = {
 
 static const app_t *app_for_window(const window_t *w)
 {
+    if (w->kind == WIN_KIND_NATIVE) {
+        const uiapp_t *ap = w->native;
+        for (int i = 0; i < NAPPS; i++) if (ap && !strcmp(apps[i].id, ap->cls->id)) return &apps[i];
+        return 0;
+    }
     for (int i = 0; i < NAPPS; i++) {
         if (apps[i].kind != w->kind) continue;
         if (w->kind == WIN_KIND_PANEL && apps[i].panel != w->panel) continue;
@@ -153,10 +164,58 @@ static void open_panel(int panel, const char *title)
     sound_open();
 }
 
+/* ---- native apps (uiapp.h) ---- */
+
+static window_t *native_grab;          /* the native window a press started in, until release */
+
+int wm_gfx_open_native(const char *id, const char *arg)
+{
+    if (!wm_gfx_mode) return -1;
+    const uiapp_class_t *cls = uiapp_find(id);
+    if (!cls) return -1;
+    int slot = wm_find_free_slot();
+    if (slot < 0) return -1;
+    uiapp_t *ap = malloc(sizeof(uiapp_t));
+    void *st = malloc((size_t)cls->state_size + 1);
+    if (!ap || !st) { if (ap) free(ap); if (st) free(st); return -1; }
+    memset(ap, 0, sizeof(*ap));
+    memset(st, 0, (size_t)cls->state_size + 1);
+    ap->cls = cls; ap->st = st; ap->w = cls->w; ap->h = cls->h; ap->dirty = 1;
+    strncpy(ap->title, cls->title, sizeof(ap->title) - 1);
+    window_t *w = &windows[slot];
+    terminal_surface_init(&w->surface);
+    w->open = 1; w->minimized = 0; w->maximized = 0;
+    w->kind = WIN_KIND_NATIVE;
+    w->native = ap;
+    w->pid = -1;
+    w->panel = 0;
+    w->initial_cmd[0] = 0;
+    strncpy(w->title, cls->title, sizeof(w->title) - 1);
+    w->title[sizeof(w->title) - 1] = 0;
+    wm_gfx_window_opened(w);
+    if (cls->init) cls->init(ap, arg);
+    wm_focus_window(w);
+    sound_open();
+    dirty = 1;
+    return 0;
+}
+
+void wm_gfx_native_closed(window_t *w)
+{
+    uiapp_t *ap = w->native;
+    if (native_grab == w) native_grab = 0;
+    if (!ap) return;
+    if (ap->cls->close) ap->cls->close(ap);
+    free(ap->st);
+    free(ap);
+    w->native = 0;
+}
+
 static void launch(const app_t *a)
 {
     sound_click();
     if (a->kind == WIN_KIND_PANEL) open_panel(a->panel, a->title);
+    else if (wm_gfx_open_native(a->id, 0) == 0) { }
     else wm_open_app(a->id);
     dirty = 1;
 }
@@ -193,7 +252,7 @@ static void set_cells(window_t *w, int cols, int rows)
 
 static void panel_size(int panel, int *pw, int *ph)
 {
-    if (panel == PANEL_SETTINGS) { *pw = 620; *ph = 470; }
+    if (panel == PANEL_SETTINGS) { *pw = 640; *ph = 470; }
     else { *pw = 440; *ph = 380; }
 }
 
@@ -209,6 +268,11 @@ void wm_gfx_window_opened(window_t *w)
 {
     if (w->kind == WIN_KIND_PANEL) {
         panel_size(w->panel, &w->gw, &w->gh);
+        w->w0 = 1; w->h0 = 1;
+    } else if (w->kind == WIN_KIND_NATIVE) {
+        uiapp_t *ap = w->native;
+        w->gw = ap->w;
+        w->gh = TITLE_H + ap->h;
         w->w0 = 1; w->h0 = 1;
     } else {
         int big = w->kind == WIN_KIND_TERMINAL || w->kind == WIN_KIND_NOTEPAD || w->kind == WIN_KIND_FILEMGR ||
@@ -354,7 +418,7 @@ static void do_action(int a)
     window_t *f = wm_focused;
     switch (a) {
     case A_ABOUT:     open_panel(PANEL_ABOUT, "About tOS"); break;
-    case A_SETTINGS:  open_panel(PANEL_SETTINGS, "Settings"); break;
+    case A_SETTINGS:  wm_gfx_open_native("settings", 0); break;
     case A_TERMINAL:
     case A_NEW_TERM:  wm_open_app("terminal"); break;
     case A_ACTIVITY:  wm_open_app("taskmgr"); break;
@@ -441,7 +505,7 @@ static void traffic_lights(int x, int y, int active, int hover)
     static const uint32_t col[3] = { 0xFF5F57, 0xFEBC2E, 0x28C840 };
     for (int i = 0; i < 3; i++) {
         int cx = x + 18 + i * 20, cy = y + TITLE_H / 2;
-        gfx_circle(&bs, cx, cy, 6, active || hover ? col[i] : 0x4B4D57, 255);
+        gfx_circle(&bs, cx, cy, 6, active || hover ? col[i] : (ui_theme.dark ? 0x4B4D57 : 0xD0D0D5), 255);
         if (hover) {
             static const char *g[3] = { "glyph_x", "glyph_minus", "glyph_maximize-2" };
             const gfx_image_t *im = gfx_image(g[i]);
@@ -521,20 +585,26 @@ static void draw_window_g(window_t *w)
     if (tx < x + 80) tx = x + 80;
     if (a) gfx_blit(&bs, icon(a->icon, 0), tx - 26, y + (TITLE_H - 20) / 2, 255);
     gfx_clip(&bs, x, y, ww - 8, TITLE_H);
-    gfx_text(&bs, &ui_font_medium, tx, y + 8, w->title, active ? C_TEXT : C_TEXT_DIM, 255);
+    gfx_text(&bs, &ui_font_medium, tx, y + 8, w->title, active ? ui_theme.title_text : C_TEXT_DIM, 255);
     gfx_unclip(&bs);
 
     /* content */
     gfx_clip(&bs, x, y + TITLE_H, ww, hh - TITLE_H);
     if (w->kind == WIN_KIND_PANEL) draw_panel(w, x, y + TITLE_H, ww, hh - TITLE_H);
-    else {
+    else if (w->kind == WIN_KIND_NATIVE && w->native) {
+        uiapp_t *ap = w->native;
+        ap->w = ww; ap->h = hh - TITLE_H;
+        gfx_fill(&bs, x, y + TITLE_H, ww, hh - TITLE_H, UI_BG);
+        ap->cls->draw(ap, &bs, x, y + TITLE_H, ww, hh - TITLE_H);
+        if (strcmp(w->title, ap->title)) { strncpy(w->title, ap->title, sizeof(w->title) - 1); }
+    } else {
         /* the grid's background colour, taken from its first cell, fills the padding too */
         uint8_t attr = (uint8_t)(w->surface.cells[0] >> 8);
         gfx_fill(&bs, x, y + TITLE_H, ww, hh - TITLE_H, pal[(attr >> 4) & 15]);
         draw_cells(w, x + CPAD_X, y + TITLE_H + CPAD_Y);
     }
     gfx_unclip(&bs);
-    gfx_hline(&bs, x, y + TITLE_H, ww, 0x000000, 90);
+    gfx_hline(&bs, x, y + TITLE_H, ww, 0x000000, ui_theme.dark ? 90 : 30);
 
     /* a thin scroll indicator for terminals with history */
     if (w->kind == WIN_KIND_TERMINAL && (w->surface.scrollback_count > 0 || w->surface.view_offset > 0) &&
@@ -547,7 +617,7 @@ static void draw_window_g(window_t *w)
     }
 
     cut_corners(w);
-    gfx_rrect_outline(&bs, x, y, ww, hh, RADIUS, 0xFFFFFF, 30);
+    gfx_rrect_outline(&bs, x, y, ww, hh, RADIUS, ui_theme.dark ? 0xFFFFFF : 0x000000, ui_theme.dark ? 30 : 40);
 
     if (w->anim > 0) {
         /* fade in over the first frames */
@@ -578,27 +648,27 @@ static void put2(char *p, int v) { p[0] = (char)('0' + v / 10 % 10); p[1] = (cha
 
 static void draw_topbar(void)
 {
-    glass(0, 0, SW, TOPBAR_H, 0, 0x101015, 120);
+    glass(0, 0, SW, TOPBAR_H, 0, ui_theme.bar_tint, ui_theme.bar_alpha);
     gfx_hline(&bs, 0, TOPBAR_H - 1, SW, 0x000000, 70);
 
     int x = 14;
     const gfx_image_t *logo = gfx_image("logo");
-    if (menu_which == MENU_SYS) gfx_rrect(&bs, x - 6, 3, 30, TOPBAR_H - 6, 6, 0xFFFFFF, 40);
-    gfx_blit(&bs, logo, x, (TOPBAR_H - 18) / 2, 255);
+    if (menu_which == MENU_SYS) gfx_rrect(&bs, x - 6, 3, 30, TOPBAR_H - 6, 6, ui_theme.dark ? 0xFFFFFF : 0x000000, 30);
+    gfx_blit_tinted(&bs, logo, x, (TOPBAR_H - 18) / 2, ui_theme.bar_text, 255);
     menu_label_x[0] = x - 6; menu_label_w[0] = 30;
     x += 34;
 
     const app_t *a = wm_focused && wm_focused->open ? app_for_window(wm_focused) : 0;
     const char *app = a ? a->title : "Desktop";
-    gfx_text(&bs, &ui_font_medium, x, 6, app, C_TEXT, 255);
+    gfx_text(&bs, &ui_font_medium, x, 6, app, ui_theme.bar_text, 255);
     x += gfx_text_width(&ui_font_medium, app) + 22;
 
     static const char *labels[2] = { "File", "Window" };
     for (int i = 0; i < 2; i++) {
         int tw = gfx_text_width(&ui_font_regular, labels[i]);
         menu_label_x[i + 1] = x - 8; menu_label_w[i + 1] = tw + 16;
-        if (menu_which == i + 2) gfx_rrect(&bs, x - 8, 3, tw + 16, TOPBAR_H - 6, 6, 0xFFFFFF, 40);
-        gfx_text(&bs, &ui_font_regular, x, 6, labels[i], C_TEXT, 230);
+        if (menu_which == i + 2) gfx_rrect(&bs, x - 8, 3, tw + 16, TOPBAR_H - 6, 6, ui_theme.dark ? 0xFFFFFF : 0x000000, 30);
+        gfx_text(&bs, &ui_font_regular, x, 6, labels[i], ui_theme.bar_text, 230);
         x += tw + 22;
     }
 
@@ -623,14 +693,15 @@ static void draw_topbar(void)
     clk[o] = 0;
     int cw = gfx_text_width(&ui_font_medium, clk);
     int rx = SW - 14 - cw;
-    gfx_text(&bs, &ui_font_medium, rx, 6, clk, C_TEXT, 255);
+    gfx_text(&bs, &ui_font_medium, rx, 6, clk, ui_theme.bar_text, 255);
     rx -= 30;
-    gfx_blit(&bs, gfx_image("glyph_search"), rx, 6, 230);
+    gfx_blit_tinted(&bs, gfx_image("glyph_search"), rx, 6, ui_theme.bar_text, 230);
     menu_label_x[3] = rx - 6; menu_label_w[3] = 28;
     rx -= 28;
-    gfx_blit(&bs, gfx_image("glyph_volume-2"), rx, 6, 230);
+    gfx_blit_tinted(&bs, gfx_image("glyph_volume-2"), rx, 6, ui_theme.bar_text, 230);
     rx -= 28;
-    gfx_blit(&bs, gfx_image("glyph_ethernet-port"), rx, 6, net_ip ? 230 : 90);   /* wired: tOS has no Wi-Fi */
+    gfx_blit_tinted(&bs, gfx_image("glyph_ethernet-port"), rx, 6, ui_theme.bar_text, net_ip ? 230 : 90);
+    eth_icon_x = rx;   /* wired: tOS has no Wi-Fi */
 }
 
 /* dock layout: index 0 is the launcher, then the dock apps, then the trash */
@@ -696,7 +767,7 @@ static void draw_dock(void)
         int lx = dock[hover_dock].x + dock[hover_dock].size / 2 - (tw + 20) / 2;
         int ly = dock_y - 40;
         gfx_shadow(&bs, lx, ly, tw + 20, 26, 120);
-        gfx_rrect(&bs, lx, ly, tw + 20, 26, 8, 0x2A2B33, 240);
+        gfx_rrect(&bs, lx, ly, tw + 20, 26, 8, C_MENU_BG, 240);
         gfx_text(&bs, &ui_font_regular, lx + 10, ly + 5, label, C_TEXT, 255);
     }
 }
@@ -707,12 +778,12 @@ static void draw_menu(void)
     int h = menu_height();
     gfx_shadow(&bs, menu_x, menu_y, menu_w, h, 200);
     gfx_rrect(&bs, menu_x, menu_y, menu_w, h, 9, C_MENU_BG, 245);
-    gfx_rrect_outline(&bs, menu_x, menu_y, menu_w, h, 9, 0xFFFFFF, 34);
+    gfx_rrect_outline(&bs, menu_x, menu_y, menu_w, h, 9, ui_theme.dark ? 0xFFFFFF : 0x000000, 34);
     int iy = menu_y + 4;
     for (int i = 0; i < menu_count; i++) {
         if (i == hover_menu) gfx_rrect(&bs, menu_x + 5, iy, menu_w - 10, ITEM_H, 6, C_ACCENT, 255);
         gfx_clip(&bs, menu_x, iy, menu_w - 12, ITEM_H);
-        gfx_text(&bs, &ui_font_regular, menu_x + 16, iy + 5, menu_items[i].label, C_TEXT, 255);
+        gfx_text(&bs, &ui_font_regular, menu_x + 16, iy + 5, menu_items[i].label, i == hover_menu ? 0xFFFFFF : C_TEXT, 255);
         gfx_unclip(&bs);
         iy += ITEM_H;
         if (menu_items[i].sep_after) {
@@ -782,7 +853,7 @@ static void section(int x, int y, const char *t)
 
 static void draw_settings(int x, int y, int w, int h)
 {
-    gfx_fill(&bs, x, y, w, h, 0x1E1F25);
+    gfx_fill(&bs, x, y, w, h, UI_BG);
     int px = x + 24, py = y + 18;
     gfx_text(&bs, &ui_font_title, px, py, "Settings", C_TEXT, 255);
     py += 44;
@@ -814,6 +885,14 @@ static void draw_settings(int x, int y, int w, int h)
         gfx_gradient_v(&tmp, bx, py, 130, 76, wa[i][0], wa[i][1]);
         gfx_text_center(&bs, &ui_font_regular, bx, py + 84, 130, wn[i], C_TEXT, 255);
     }
+    {
+        int bx = px + 3 * 150;
+        gfx_rrect(&bs, bx - 3, py - 3, 136, 82, 10, wallpaper_choice == 3 ? C_ACCENT : 0x1E1F25, 255);
+        gfx_rrect(&bs, bx, py, 130, 76, 8, 0x2A2B33, 255);
+        gfx_blit(&bs, icon("viewer", 0), bx + 55, py + 18, 255);
+        gfx_text_center(&bs, &ui_font_small, bx, py + 46, 130, "PNG or JPEG", C_TEXT_DIM, 255);
+        gfx_text_center(&bs, &ui_font_regular, bx, py + 84, 130, "Picture...", C_TEXT, 255);
+    }
     py += 118;
 
     section(px, py, "DOCK"); py += 22;
@@ -834,6 +913,7 @@ static void click_settings(int lx, int ly)
     py += 54 + 22;
     for (int i = 0; i < 3; i++)
         if (lx >= px + i * 150 && lx < px + i * 150 + 130 && ly >= py && ly < py + 76) { set_wallpaper(i); return; }
+    if (lx >= px + 450 && lx < px + 580 && ly >= py && ly < py + 76) { wm_gfx_open_native("files", 0); return; }
     py += 118 + 22;
     if (lx >= px && lx < px + 220 && ly >= py && ly < py + 32) { dock_magnify = !dock_magnify; return; }
     py += 54 + 22;
@@ -853,7 +933,7 @@ static void fmt_num(char *out, uint32_t v)
 
 static void draw_about(int x, int y, int w, int h)
 {
-    gfx_fill(&bs, x, y, w, h, 0x1E1F25);
+    gfx_fill(&bs, x, y, w, h, UI_BG);
     const gfx_image_t *lg = icon("launcher", 1);
     gfx_blit_scaled(&bs, lg, x + (w - 72) / 2, y + 24, 72, 72, 255);
     gfx_text_center(&bs, &ui_font_huge, x, y + 100, w, "tOS", C_TEXT, 255);
@@ -889,6 +969,228 @@ static void draw_panel(window_t *w, int x, int y, int pw, int ph)
     else draw_about(x, y, pw, ph);
 }
 
+/* ------------------------------------------------------------------ the password sheet
+ * Every password prompt a window's task makes while the desktop is up (sudo, su, privileged
+ * file operations) comes here instead of the terminal: a macOS-style dialog over everything,
+ * with the asking app named, the user's name filled in and the password shown as dots. */
+
+static struct {
+    volatile int active, done;
+    int async;                      /* opened by a native app: checked here, not by a task */
+    int result;
+    char app[48], user[32], icon[24];
+    char pw[64];
+    int len;
+    int attempt;
+    uint32_t shake_ms, last_req_ms;
+} sheet;
+
+int wm_gfx_password_sheet(const char *prompt, char *out, int max)
+{
+    if (!wm_gfx_mode) return -2;
+    while (sheet.active) task_yield();             /* one at a time */
+    window_t *w = (window_t *)task_get_userdata();
+    memset((void *)&sheet.pw, 0, sizeof(sheet.pw));
+    sheet.len = 0;
+    strcpy(sheet.app, w && w->open ? (w->kind == WIN_KIND_TERMINAL ? "Terminal" : w->title) : "tOS");
+    {
+        const app_t *ap = w && w->open ? app_for_window(w) : 0;
+        strcpy(sheet.icon, ap ? ap->icon : "terminal");
+    }
+    /* "[sudo] password for alice: " -> alice */
+    sheet.user[0] = 0;
+    const char *f = prompt;
+    for (const char *q = prompt; *q; q++) if (q[0] == 'f' && q[1] == 'o' && q[2] == 'r' && q[3] == ' ') f = q + 4;
+    int o = 0;
+    while (f != prompt && *f && *f != ':' && *f != ' ' && o < 31) sheet.user[o++] = *f++;
+    sheet.user[o] = 0;
+    uint32_t now = debugmon_uptime_ms();
+    /* asked again straight after an answer: that answer was wrong, so shake */
+    if (now - sheet.last_req_ms < 3000) { sheet.attempt++; sheet.shake_ms = now; } else sheet.attempt = 0;
+    sheet.done = 0;
+    sheet.active = 1;
+    dirty = 1;
+    while (!sheet.done) task_yield();
+    int r = sheet.result;
+    if (r >= 0) {
+        int n = sheet.len < max - 1 ? sheet.len : max - 1;
+        memcpy(out, sheet.pw, (size_t)n);
+        out[n] = 0;
+        r = n;
+    }
+    memset((void *)&sheet.pw, 0, sizeof(sheet.pw));
+    sheet.last_req_ms = debugmon_uptime_ms();
+    sheet.active = 0;
+    dirty = 1;
+    return r;
+}
+
+#define SHEET_W 500
+#define SHEET_H 214
+
+static void sheet_rect(int *x, int *y)
+{
+    int shake = 0;
+    uint32_t dt = debugmon_uptime_ms() - sheet.shake_ms;
+    if (sheet.attempt && dt < 400) {
+        static const int off[8] = { -12, 12, -9, 9, -5, 5, -2, 0 };
+        shake = off[(dt / 50) % 8];
+        dirty = 1;
+    }
+    *x = (SW - SHEET_W) / 2 + shake;
+    *y = (SH - SHEET_H) / 2 - 60;
+}
+
+/* the dialog's layout, shared by drawing and clicking */
+#define SH_FIELD_X 206
+#define SH_FIELD_W (SHEET_W - SH_FIELD_X - 26)
+#define SH_USER_Y  92
+#define SH_PASS_Y  124
+#define SH_BTN_Y   (SHEET_H - 46)
+#define SH_OK_X    (SHEET_W - 26 - 76)
+#define SH_CANCEL_X (SH_OK_X - 12 - 76)
+
+/* The classic macOS authorisation dialog: a light window, a golden padlock with the asking
+ * app's own icon on it, bold text, labelled fields, Cancel and a blue OK. */
+static void draw_sheet(void)
+{
+    if (!sheet.active) return;
+    gfx_fill_alpha(&bs, 0, 0, SW, SH, 0x000000, 70);
+    int x, y;
+    sheet_rect(&x, &y);
+    gfx_shadow(&bs, x, y, SHEET_W, SHEET_H, 255);
+    gfx_rrect(&bs, x, y, SHEET_W, SHEET_H, 10, 0xECECEC, 255);
+    gfx_rrect(&bs, x, y, SHEET_W, 22, 10, 0xDCDCDC, 255);              /* the title strip */
+    gfx_fill(&bs, x, y + 12, SHEET_W, 10, 0xDCDCDC);
+    gfx_hline(&bs, x, y + 22, SHEET_W, 0xBDBDBD, 255);
+    gfx_rrect_outline(&bs, x, y, SHEET_W, SHEET_H, 10, 0x000000, 60);
+    /* padlock, with the app's icon in its lower right corner */
+    gfx_blit(&bs, gfx_image("padlock"), x + 26, y + 40, 255);
+    char key[32] = "icon48_";
+    strcat(key, sheet.icon[0] ? sheet.icon : "terminal");
+    gfx_blit_scaled(&bs, gfx_image(key), x + 74, y + 88, 34, 34, 255);
+    /* the message, wrapped in two lines at most */
+    char t[128];
+    strcpy(t, sheet.app);
+    strcat(t, " wants to make changes. Type your password to allow this.");
+    int tx = x + 132, ty = y + 40, maxw = SHEET_W - 132 - 26;
+    char line[128];
+    int lo = 0;
+    for (const char *p2 = t; *p2; ) {
+        const char *wend = p2;
+        while (*wend && *wend != ' ') wend++;
+        char word[48];
+        int wl = (int)(wend - p2) < 47 ? (int)(wend - p2) : 47;
+        memcpy(word, p2, (size_t)wl); word[wl] = 0;
+        char trial[128];
+        memcpy(trial, line, (size_t)lo); trial[lo] = 0;
+        if (lo) strcat(trial, " ");
+        strcat(trial, word);
+        if (lo && gfx_text_width(&ui_font_medium, trial) > maxw) {
+            line[lo] = 0;
+            gfx_text(&bs, &ui_font_medium, tx, ty, line, 0x1D1D1F, 255);
+            ty += 20;
+            lo = 0;
+            strcpy(line, word); lo = wl;
+        } else { strcpy(line, trial); lo = (int)strlen(trial); }
+        p2 = *wend ? wend + 1 : wend;
+    }
+    line[lo] = 0;
+    gfx_text(&bs, &ui_font_medium, tx, ty, line, 0x1D1D1F, 255);
+    /* fields */
+    gfx_text(&bs, &ui_font_regular, x + SH_FIELD_X - 8 - gfx_text_width(&ui_font_regular, "Username:"), y + SH_USER_Y + 4, "Username:", 0x1D1D1F, 255);
+    gfx_text(&bs, &ui_font_regular, x + SH_FIELD_X - 8 - gfx_text_width(&ui_font_regular, "Password:"), y + SH_PASS_Y + 4, "Password:", 0x1D1D1F, 255);
+    gfx_fill(&bs, x + SH_FIELD_X, y + SH_USER_Y, SH_FIELD_W, 24, 0xFFFFFF);
+    gfx_rrect_outline(&bs, x + SH_FIELD_X, y + SH_USER_Y, SH_FIELD_W, 24, 0, 0xB8B8B8, 255);
+    gfx_text(&bs, &ui_font_regular, x + SH_FIELD_X + 6, y + SH_USER_Y + 4, sheet.user, 0x1D1D1F, 255);
+    gfx_rrect(&bs, x + SH_FIELD_X - 3, y + SH_PASS_Y - 3, SH_FIELD_W + 6, 30, 5, 0x7FB2F0, 255);   /* focus ring */
+    gfx_fill(&bs, x + SH_FIELD_X, y + SH_PASS_Y, SH_FIELD_W, 24, 0xFFFFFF);
+    for (int i = 0; i < sheet.len && i < 30; i++) gfx_circle(&bs, x + SH_FIELD_X + 10 + i * 10, y + SH_PASS_Y + 12, 3, 0x1D1D1F, 255);
+    if ((debugmon_uptime_ms() / 500) % 2 == 0) gfx_fill(&bs, x + SH_FIELD_X + 6 + sheet.len * 10, y + SH_PASS_Y + 4, 1, 16, 0x1D1D1F);
+    dirty = 1;
+    /* buttons */
+    gfx_rrect(&bs, x + SH_CANCEL_X, y + SH_BTN_Y, 76, 24, 6, 0xFFFFFF, 255);
+    gfx_rrect_outline(&bs, x + SH_CANCEL_X, y + SH_BTN_Y, 76, 24, 6, 0xBDBDBD, 255);
+    gfx_text_center(&bs, &ui_font_regular, x + SH_CANCEL_X, y + SH_BTN_Y + 3, 76, "Cancel", 0x1D1D1F, 255);
+    gfx_gradient_v(&bs, x + SH_OK_X + 2, y + SH_BTN_Y, 72, 24, 0x6CB3FA, 0x2A84F2);
+    gfx_rrect(&bs, x + SH_OK_X, y + SH_BTN_Y, 76, 24, 6, 0x3C8EF5, 255);
+    gfx_text_center(&bs, &ui_font_regular, x + SH_OK_X, y + SH_BTN_Y + 3, 76, "OK", 0xFFFFFF, 255);
+}
+
+static int authz_state;              /* 0 asking, 1 granted, -1 refused (uihost_authorize) */
+static int authz_grant;              /* one privileged call may use it */
+
+void uihost_authorize(const char *reason)
+{
+    (void)reason;
+    if (sheet.active) return;
+    uint32_t uid, gid;
+    auth_session(&uid, &gid);
+    memset((void *)&sheet.pw, 0, sizeof(sheet.pw));
+    sheet.len = 0;
+    strcpy(sheet.app, "System Settings");
+    strcpy(sheet.icon, "settings");
+    strncpy(sheet.user, auth_name_of(uid), sizeof(sheet.user) - 1);
+    sheet.attempt = 0;
+    sheet.async = 1;
+    sheet.done = 0;
+    sheet.active = 1;
+    authz_state = 0;
+    dirty = 1;
+}
+
+int uihost_authorized(void) { return authz_state; }
+
+int wm_gfx_take_authorization(void)
+{
+    if (!authz_grant) return 0;
+    authz_grant = 0;
+    authz_state = 0;
+    return 1;
+}
+
+static void sheet_finish(int ok)
+{
+    if (sheet.async) {
+        /* checked here: the right password grants, a wrong one shakes and asks again */
+        if (ok && auth_check_password(sheet.user, sheet.pw) == 0) { authz_state = 1; authz_grant = 1; }
+        else if (ok && ++sheet.attempt < 3) {
+            sheet.shake_ms = debugmon_uptime_ms();
+            memset((void *)&sheet.pw, 0, sizeof(sheet.pw));
+            sheet.len = 0;
+            dirty = 1;
+            return;
+        } else authz_state = -1;
+        memset((void *)&sheet.pw, 0, sizeof(sheet.pw));
+        sheet.async = 0;
+        sheet.active = 0;
+        dirty = 1;
+        return;
+    }
+    sheet.result = ok ? 0 : -1;
+    sheet.done = 1;
+    dirty = 1;
+}
+
+static void sheet_input(int pressed_btn)
+{
+    char ch;
+    while (keyboard_try_getchar(&ch)) {
+        if (ch == '\n') { sheet_finish(1); return; }
+        if (ch == 0x1B) { sheet_finish(0); return; }
+        if (ch == '\b') { if (sheet.len) sheet.pw[--sheet.len] = 0; }
+        else if ((unsigned char)ch >= 32 && sheet.len < (int)sizeof(sheet.pw) - 1) sheet.pw[sheet.len++] = ch;
+        dirty = 1;
+    }
+    while (keyboard_get_special()) { }
+    if (pressed_btn) {
+        int x, y;
+        sheet_rect(&x, &y);
+        if (mx >= x + SH_CANCEL_X && mx < x + SH_CANCEL_X + 76 && my >= y + SH_BTN_Y && my < y + SH_BTN_Y + 24) sheet_finish(0);
+        else if (mx >= x + SH_OK_X && mx < x + SH_OK_X + 76 && my >= y + SH_BTN_Y && my < y + SH_BTN_Y + 24) sheet_finish(1);
+    }
+}
+
 /* ------------------------------------------------------------------ frames */
 
 static void compose(void)
@@ -906,6 +1208,7 @@ static void compose(void)
     draw_dock();
     draw_topbar();
     draw_menu();
+    draw_sheet();
 }
 
 static void cursor_erase(void)
@@ -956,9 +1259,134 @@ static void shutdown_screen(void)
 
 /* ------------------------------------------------------------------ wallpaper, mode */
 
+static void fmt_num(char *out, uint32_t v);
+
+/* ---- desktop settings, kept in ~/.desktop as key=value lines ---- */
+
+static int set_resolution(int w, int h);
+static void set_wallpaper(int choice);
+static void prefs_save(void);
+
+int uihost_get(const char *key)
+{
+    if (!strcmp(key, "dark")) return ui_theme.dark;
+    if (!strcmp(key, "dock_magnify")) return dock_magnify;
+    if (!strcmp(key, "mouse_speed")) return mouse_speed;
+    if (!strcmp(key, "wallpaper")) return wallpaper_choice;
+    if (!strcmp(key, "width")) return SW;
+    if (!strcmp(key, "height")) return SH;
+    return -1;
+}
+
+void uihost_set(const char *key, int v)
+{
+    if (!strcmp(key, "dark")) ui_set_dark(v);
+    else if (!strcmp(key, "dock_magnify")) dock_magnify = v;
+    else if (!strcmp(key, "mouse_speed")) mouse_speed = v;
+    else if (!strcmp(key, "wallpaper")) set_wallpaper(v);
+    else if (!strcmp(key, "resolution")) {
+        static const int rw[5] = { 1024, 1280, 1366, 1600, 1920 }, rh[5] = { 768, 720, 768, 900, 1080 };
+        if (v >= 0 && v < 5) set_resolution(rw[v], rh[v]);
+    }
+    dirty = 1;
+    prefs_save();
+}
+
+static void prefs_path(char *out)
+{
+    strcpy(out, uihost_home());
+    if (strcmp(out, "/")) strcat(out, "/");
+    strcat(out, ".desktop");
+}
+
+static void prefs_save(void)
+{
+    char b[160] = "dark=";
+    char n[12];
+    n[0] = 0; fmt_num(n, (uint32_t)ui_theme.dark); strcat(b, n);
+    strcat(b, "\nmagnify="); n[0] = 0; fmt_num(n, (uint32_t)dock_magnify); strcat(b, n);
+    strcat(b, "\nspeed="); n[0] = 0; fmt_num(n, (uint32_t)mouse_speed); strcat(b, n);
+    strcat(b, "\nwidth="); n[0] = 0; fmt_num(n, (uint32_t)SW); strcat(b, n);
+    strcat(b, "\nheight="); n[0] = 0; fmt_num(n, (uint32_t)SH); strcat(b, n);
+    strcat(b, "\n");
+    char p[96];
+    prefs_path(p);
+    uihost_write(p, b, (uint32_t)strlen(b));
+}
+
+static int pref_int(const char *text, const char *key, int dflt)
+{
+    int kl = (int)strlen(key);
+    for (const char *p = text; *p; p++) {
+        if ((p == text || p[-1] == '\n') && !strncmp(p, key, (size_t)kl) && p[kl] == '=') {
+            int v = 0;
+            for (p += kl + 1; *p >= '0' && *p <= '9'; p++) v = v * 10 + (*p - '0');
+            return v;
+        }
+    }
+    return dflt;
+}
+
+static void prefs_load(void)
+{
+    char p[96];
+    prefs_path(p);
+    uint8_t *d; uint32_t n;
+    if (uihost_read(p, &d, &n) != 0) return;
+    const char *t = (const char *)d;
+    ui_set_dark(pref_int(t, "dark", 1));
+    dock_magnify = pref_int(t, "magnify", 1);
+    mouse_speed = pref_int(t, "speed", 1);
+    int w = pref_int(t, "width", 1280), h = pref_int(t, "height", 720);
+    free(d);
+    if (w != SW || h != SH) set_resolution(w, h);
+}
+
+static char custom_wallpaper[224];
+
+static int load_custom_wallpaper(const char *path)
+{
+    uint8_t *rgba;
+    uint32_t w, h;
+    const char *err;
+    if (img_load(path, &rgba, &w, &h, &err) != 0) return -1;
+    gfx_wallpaper_from(wall, SW, SH, wall_blur, rgba, (int)w, (int)h, 4);
+    free(rgba);
+    return 0;
+}
+
+static void wallpaper_pref_path(char *out)
+{
+    strcpy(out, uihost_home());
+    if (strcmp(out, "/")) strcat(out, "/");
+    strcat(out, ".wallpaper");
+}
+
+/* Settings and Files call this: a PNG or JPEG becomes the wallpaper, and stays it after a
+ * restart (the path is kept in ~/.wallpaper). */
+int uihost_set_wallpaper(const char *path)
+{
+    if (load_custom_wallpaper(path) != 0) return -1;
+    strncpy(custom_wallpaper, path, sizeof(custom_wallpaper) - 1);
+    wallpaper_choice = 3;
+    char pref[96];
+    wallpaper_pref_path(pref);
+    uihost_write(pref, path, (uint32_t)strlen(path));
+    dirty = 1;
+    return 0;
+}
+
 static void set_wallpaper(int choice)
 {
     wallpaper_choice = choice;
+    if (choice == 3 && custom_wallpaper[0] && load_custom_wallpaper(custom_wallpaper) == 0) { dirty = 1; return; }
+    if (choice == 3) wallpaper_choice = choice = 0;
+    if (choice != 0) {
+        /* a built-in gradient chosen: forget the picture */
+        char pref[96];
+        wallpaper_pref_path(pref);
+        if (custom_wallpaper[0]) { uihost_delete(pref); custom_wallpaper[0] = 0; }
+    }
     if (choice == 0) gfx_wallpaper(wall, SW, SH, wall_blur);
     else {
         uint32_t top = choice == 1 ? 0x0B3A66 : 0x2A2C33, bot = choice == 1 ? 0x2BB3C9 : 0x5A5F6B;
@@ -1031,6 +1459,20 @@ int wm_gfx_init(void)
     if (bochs_set_mode(&vdev, SW, SH, 32) != 0) return -1;
     lfb = (uint32_t *)vdev.lfb;
     set_wallpaper(0);
+    /* the picture chosen last time, if there was one */
+    {
+        char pref[96];
+        wallpaper_pref_path(pref);
+        uint8_t *d; uint32_t n;
+        if (uihost_read(pref, &d, &n) == 0) {
+            char path[224];
+            uint32_t k = n < sizeof(path) - 1 ? n : sizeof(path) - 1;
+            memcpy(path, d, k); path[k] = 0;
+            free(d);
+            if (load_custom_wallpaper(path) == 0) { strcpy(custom_wallpaper, path); wallpaper_choice = 3; }
+        }
+    }
+    prefs_load();
     mouse_set_pixel_mode(SW, SH);
     mx = SW / 2; my = SH / 2;
     dirty = 1;
@@ -1098,6 +1540,7 @@ static void press(int x, int y)
                 return;
             }
         if (x >= menu_label_x[3] && x < menu_label_x[3] + menu_label_w[3]) { launcher_open = 1; dirty = 1; }
+        else if (x >= eth_icon_x - 6 && x < eth_icon_x + 22) wm_gfx_open_native("netmon", 0);
         return;
     }
     int d = dock_hit(x, y);
@@ -1129,6 +1572,13 @@ static void press(int x, int y)
         if (last_title_click_win == w && now - last_title_click_ms < 400) { zoom_window(w); last_title_click_win = 0; return; }
         last_title_click_win = w; last_title_click_ms = now;
         drag_win = w; drag_dx = lx; drag_dy = ly;
+        return;
+    }
+    if (w->kind == WIN_KIND_NATIVE && w->native) {
+        uiapp_t *ap = w->native;
+        if (ap->cls->resizable && lx >= w->gw - 16 && ly >= w->gh - 16) { resize_win = w; return; }
+        native_grab = w;
+        if (ap->cls->press) ap->cls->press(ap, lx, ly - TITLE_H, 1);
         return;
     }
     if (w->kind != WIN_KIND_PANEL && !w->maximized && lx >= w->gw - 16 && ly >= w->gh - 16) {
@@ -1190,6 +1640,12 @@ void wm_gfx_tick(void)
     int rpressed = ((btn & 2) && !(prev_btn & 2)) || (rlatched && !(prev_btn & 2));
     prev_btn = btn;
 
+    if (sheet.active && !sheet.done) {
+        sheet_input(pressed);
+        pressed = 0;
+        rpressed = 0;
+    }
+
     if (drag_win) {
         if (btn & 1) {
             drag_win->gx = mx - drag_dx;
@@ -1198,7 +1654,14 @@ void wm_gfx_tick(void)
             if (moved) dirty = 1;
         } else drag_win = 0;
     } else if (resize_win) {
-        if (btn & 1) {
+        if ((btn & 1) && resize_win->kind == WIN_KIND_NATIVE) {
+            uiapp_t *ap = resize_win->native;
+            int nw = mx - resize_win->gx, nh = my - resize_win->gy;
+            int minw = ap->cls->w * 2 / 3, minh = TITLE_H + ap->cls->h * 2 / 3;
+            if (nw < minw) nw = minw;
+            if (nh < minh) nh = minh;
+            if (nw != resize_win->gw || nh != resize_win->gh) { resize_win->gw = nw; resize_win->gh = nh; dirty = 1; }
+        } else if (btn & 1) {
             int cols = (mx - resize_win->gx - 2 * CPAD_X + CW / 2) / CW;
             int rows = (my - resize_win->gy - TITLE_H - 2 * CPAD_Y + CH / 2) / CH;
             int oc = resize_win->w0, orow = resize_win->h0;
@@ -1221,7 +1684,36 @@ void wm_gfx_tick(void)
             int vo = u->surface.view_offset + wheel * 2;
             u->surface.view_offset = vo < 0 ? 0 : vo > maxo ? maxo : vo;
             dirty = 1;
+        } else if (u && u->kind == WIN_KIND_NATIVE && u->native) {
+            uiapp_t *ap = u->native;
+            if (ap->cls->wheel) ap->cls->wheel(ap, wheel);
         } else if (u) { wheel_target = u; pending_wheel_delta = wheel; }
+    }
+
+    /* a press inside a native app: it sees the drag and the release */
+    if (native_grab) {
+        uiapp_t *ap = native_grab->native;
+        int lx = mx - native_grab->gx, ly = my - native_grab->gy - TITLE_H;
+        if (!ap || !native_grab->open) native_grab = 0;
+        else if (btn & 1) { if (moved && ap->cls->drag) ap->cls->drag(ap, lx, ly); }
+        else { if (ap->cls->release) ap->cls->release(ap, lx, ly); native_grab = 0; }
+    }
+
+    /* the keyboard belongs to a focused native app: no task has the focus then */
+    if (wm_focused && wm_focused->open && wm_focused->kind == WIN_KIND_NATIVE && wm_focused->native) {
+        uiapp_t *ap = wm_focused->native;
+        char ch;
+        while (keyboard_try_getchar(&ch)) if (ap->cls->key) ap->cls->key(ap, (unsigned char)ch);
+        int sp;
+        static const int map[5] = { 0, UI_KEY_LEFT, UI_KEY_RIGHT, UI_KEY_UP, UI_KEY_DOWN };
+        while ((sp = keyboard_get_special()) != 0) if (sp >= 1 && sp <= 4 && ap->cls->key) ap->cls->key(ap, map[sp]);
+    }
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        window_t *w = &windows[i];
+        if (!w->open || w->kind != WIN_KIND_NATIVE || !w->native) continue;
+        uiapp_t *ap = w->native;
+        if (!w->minimized && ap->cls->tick && ap->cls->tick(ap)) dirty = 1;
+        if (ap->dirty) { ap->dirty = 0; if (!w->minimized) dirty = 1; }
     }
 
     /* hover states that change the picture */
@@ -1241,7 +1733,7 @@ void wm_gfx_tick(void)
     /* window contents that changed since they were last drawn */
     for (int i = 0; i < MAX_WINDOWS; i++) {
         window_t *w = &windows[i];
-        if (!w->open || w->minimized || w->kind == WIN_KIND_PANEL) continue;
+        if (!w->open || w->minimized || w->kind == WIN_KIND_PANEL || w->kind == WIN_KIND_NATIVE) continue;
         uint32_t s = surface_sum(w);
         if (s != w->g_sum) { w->g_sum = s; dirty = 1; }
     }

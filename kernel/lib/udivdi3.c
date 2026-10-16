@@ -56,3 +56,11 @@ uint64_t __udivmoddi4(uint64_t num, uint64_t den, uint64_t *rem)
     if (rem) *rem = __udivmoddi3(num, den, 1);
     return quot;
 }
+
+/* signed quotient and remainder in one call: newer GCC emits it for code that uses both */
+int64_t __divmoddi4(int64_t num, int64_t den, int64_t *rem)
+{
+    int64_t q = __divdi3(num, den);
+    if (rem) *rem = num - q * den;
+    return q;
+}

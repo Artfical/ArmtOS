@@ -173,21 +173,21 @@ void gfx_copy_rect(gfx_surface_t *dst, const gfx_surface_t *src, int x, int y, i
 
 /* ---- images ---- */
 
-static gfx_image_t images[96];
+static gfx_image_t images[160];
 static int images_ready;
 
 const gfx_image_t *gfx_image(const char *name)
 {
     if (!assets) return 0;
     if (!images_ready) {
-        for (int i = 0; i < ui_image_count && i < 96; i++) {
+        for (int i = 0; i < ui_image_count && i < 160; i++) {
             images[i].w = ui_images[i].w;
             images[i].h = ui_images[i].h;
             images[i].rgba = assets + ui_images[i].off;
         }
         images_ready = 1;
     }
-    for (int i = 0; i < ui_image_count && i < 96; i++)
+    for (int i = 0; i < ui_image_count && i < 160; i++)
         if (!strcmp(ui_images[i].name, name)) return &images[i];
     return 0;
 }
@@ -278,25 +278,22 @@ void gfx_shadow(gfx_surface_t *s, int x, int y, int w, int h, int strength)
 
 /* ---- wallpaper ---- */
 
-int gfx_wallpaper(uint32_t *out, int w, int h, uint32_t *blurred)
+/* Any picture as the wallpaper: scaled to cover the screen (cropping the longer side, never
+ * stretching), then a frosted copy for the glass bars. `bpp` is 3 (RGB) or 4 (RGBA). */
+int gfx_wallpaper_from(uint32_t *out, int w, int h, uint32_t *blurred, const uint8_t *src, int sw, int sh, int bpp)
 {
-    int idx = -1;
-    for (int i = 0; i < ui_image_count; i++) if (!strcmp(ui_images[i].name, "wallpaper")) idx = i;
-    if (idx < 0 || !assets) return -1;
-    const uint8_t *src = assets + ui_images[idx].off;
-    int sw = ui_images[idx].w, sh = ui_images[idx].h;
-    /* cover the screen, cropping the longer side, so the picture never stretches */
+    if (!src || sw <= 0 || sh <= 0) return -1;
     int scale_num, scale_den;
-    if (w * sh > h * sw) { scale_num = sw; scale_den = w; }
+    if ((int64_t)w * sh > (int64_t)h * sw) { scale_num = sw; scale_den = w; }
     else { scale_num = sh; scale_den = h; }
-    int offx = (int)((sw - w * scale_num / scale_den) / 2), offy = (int)((sh - h * scale_num / scale_den) / 2);
+    int offx = (sw - (int)((int64_t)w * scale_num / scale_den)) / 2, offy = (sh - (int)((int64_t)h * scale_num / scale_den)) / 2;
     for (int y = 0; y < h; y++) {
-        int sy = offy + (int)(y * scale_num / scale_den);
+        int sy = offy + (int)((int64_t)y * scale_num / scale_den);
         if (sy >= sh) sy = sh - 1;
         for (int x = 0; x < w; x++) {
-            int sx = offx + (int)(x * scale_num / scale_den);
+            int sx = offx + (int)((int64_t)x * scale_num / scale_den);
             if (sx >= sw) sx = sw - 1;
-            const uint8_t *p = src + (sy * sw + sx) * 3;
+            const uint8_t *p = src + ((size_t)sy * sw + sx) * bpp;
             out[y * w + x] = gfx_rgb(p[0], p[1], p[2]);
         }
     }
@@ -341,6 +338,14 @@ int gfx_wallpaper(uint32_t *out, int w, int h, uint32_t *blurred)
     }
     free(line);
     return 0;
+}
+
+int gfx_wallpaper(uint32_t *out, int w, int h, uint32_t *blurred)
+{
+    int idx = -1;
+    for (int i = 0; i < ui_image_count; i++) if (!strcmp(ui_images[i].name, "wallpaper")) idx = i;
+    if (idx < 0 || !assets) return -1;
+    return gfx_wallpaper_from(out, w, h, blurred, assets + ui_images[idx].off, ui_images[idx].w, ui_images[idx].h, 3);
 }
 
 /* ---- text ---- */
@@ -420,6 +425,74 @@ void gfx_cell(gfx_surface_t *s, int x, int y, uint8_t ch, uint32_t fg, uint32_t 
         for (int i = 0; i < w; i++) {
             int a = mr ? mr[i] : 0;
             row[i] = a == 0 ? bg : (a == 255 ? fg : gfx_mix(bg, fg, a));
+        }
+    }
+}
+
+/* ---- lines and angles, in integers ---- */
+
+static const int16_t sin_tab[360] = {
+    0, 71, 143, 214, 286, 357, 428, 499, 570, 641, 711, 782, 852, 921, 991,
+    1060, 1129, 1198, 1266, 1334, 1401, 1468, 1534, 1600, 1666, 1731, 1796, 1860, 1923, 1986,
+    2048, 2110, 2171, 2231, 2290, 2349, 2408, 2465, 2522, 2578, 2633, 2687, 2741, 2793, 2845,
+    2896, 2946, 2996, 3044, 3091, 3138, 3183, 3228, 3271, 3314, 3355, 3396, 3435, 3474, 3511,
+    3547, 3582, 3617, 3650, 3681, 3712, 3742, 3770, 3798, 3824, 3849, 3873, 3896, 3917, 3937,
+    3956, 3974, 3991, 4006, 4021, 4034, 4046, 4056, 4065, 4074, 4080, 4086, 4090, 4094, 4095,
+    4096, 4095, 4094, 4090, 4086, 4080, 4074, 4065, 4056, 4046, 4034, 4021, 4006, 3991, 3974,
+    3956, 3937, 3917, 3896, 3873, 3849, 3824, 3798, 3770, 3742, 3712, 3681, 3650, 3617, 3582,
+    3547, 3511, 3474, 3435, 3396, 3355, 3314, 3271, 3228, 3183, 3138, 3091, 3044, 2996, 2946,
+    2896, 2845, 2793, 2741, 2687, 2633, 2578, 2522, 2465, 2408, 2349, 2290, 2231, 2171, 2110,
+    2048, 1986, 1923, 1860, 1796, 1731, 1666, 1600, 1534, 1468, 1401, 1334, 1266, 1198, 1129,
+    1060, 991, 921, 852, 782, 711, 641, 570, 499, 428, 357, 286, 214, 143, 71,
+    0, -71, -143, -214, -286, -357, -428, -499, -570, -641, -711, -782, -852, -921, -991,
+    -1060, -1129, -1198, -1266, -1334, -1401, -1468, -1534, -1600, -1666, -1731, -1796, -1860, -1923, -1986,
+    -2048, -2110, -2171, -2231, -2290, -2349, -2408, -2465, -2522, -2578, -2633, -2687, -2741, -2793, -2845,
+    -2896, -2946, -2996, -3044, -3091, -3138, -3183, -3228, -3271, -3314, -3355, -3396, -3435, -3474, -3511,
+    -3547, -3582, -3617, -3650, -3681, -3712, -3742, -3770, -3798, -3824, -3849, -3873, -3896, -3917, -3937,
+    -3956, -3974, -3991, -4006, -4021, -4034, -4046, -4056, -4065, -4074, -4080, -4086, -4090, -4094, -4095,
+    -4096, -4095, -4094, -4090, -4086, -4080, -4074, -4065, -4056, -4046, -4034, -4021, -4006, -3991, -3974,
+    -3956, -3937, -3917, -3896, -3873, -3849, -3824, -3798, -3770, -3742, -3712, -3681, -3650, -3617, -3582,
+    -3547, -3511, -3474, -3435, -3396, -3355, -3314, -3271, -3228, -3183, -3138, -3091, -3044, -2996, -2946,
+    -2896, -2845, -2793, -2741, -2687, -2633, -2578, -2522, -2465, -2408, -2349, -2290, -2231, -2171, -2110,
+    -2048, -1986, -1923, -1860, -1796, -1731, -1666, -1600, -1534, -1468, -1401, -1334, -1266, -1198, -1129,
+    -1060, -991, -921, -852, -782, -711, -641, -570, -499, -428, -357, -286, -214, -143, -71
+};
+
+int gfx_sin(int deg) { deg %= 360; if (deg < 0) deg += 360; return sin_tab[deg]; }
+int gfx_cos(int deg) { return gfx_sin(deg + 90); }
+
+/* A segment with round ends and radius r (in 1/4 pixels), anti-aliased: each pixel near it is
+ * covered by how far its centre lies from the segment. All in 1/16-pixel fixed point. */
+void gfx_capsule(gfx_surface_t *s, int x0, int y0, int x1, int y1, int r4, uint32_t c, int alpha)
+{
+    int R = r4 * 4;                                   /* radius in 1/16 px */
+    int ax = x0 * 16, ay = y0 * 16, bx = x1 * 16, by = y1 * 16;
+    int minx = (x0 < x1 ? x0 : x1) - r4 / 4 - 2, maxx = (x0 > x1 ? x0 : x1) + r4 / 4 + 2;
+    int miny = (y0 < y1 ? y0 : y1) - r4 / 4 - 2, maxy = (y0 > y1 ? y0 : y1) + r4 / 4 + 2;
+    int dx = bx - ax, dy = by - ay;
+    int64_t len2 = (int64_t)dx * dx + (int64_t)dy * dy;
+    for (int py = miny; py <= maxy; py++) {
+        if (py < s->cy0 || py >= s->cy1) continue;
+        for (int px = minx; px <= maxx; px++) {
+            if (px < s->cx0 || px >= s->cx1) continue;
+            int qx = px * 16 + 8, qy = py * 16 + 8;
+            int64_t t = len2 ? ((int64_t)(qx - ax) * dx + (int64_t)(qy - ay) * dy) * 1024 / len2 : 0;
+            if (t < 0) t = 0;
+            if (t > 1024) t = 1024;
+            int cx = ax + (int)(dx * t / 1024), cy = ay + (int)(dy * t / 1024);
+            int ex = qx - cx, ey = qy - cy;
+            int d2 = ex * ex + ey * ey;
+            /* distance to the edge, in 1/16 px: inside by more than 8 = fully covered */
+            if (d2 >= (R + 8) * (R + 8)) continue;          /* clearly outside */
+            int edge;
+            if (R > 8 && d2 <= (R - 8) * (R - 8)) edge = 8;  /* clearly inside */
+            else {
+                int d = R > 8 ? R - 8 : 0;
+                while ((d + 1) * (d + 1) <= d2) d++;         /* integer sqrt over the thin rim only */
+                edge = R - d;
+            }
+            int cov = edge >= 8 ? 255 : edge <= -8 ? 0 : (edge + 8) * 255 / 16;
+            if (cov) blend(&s->px[py * s->w + px], c, cov * alpha / 255);
         }
     }
 }

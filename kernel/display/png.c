@@ -17,7 +17,9 @@
 #endif
 
 #define MAXBITS 15
-#define MAX_RAW_SIZE (800u * 1024u)
+/* filtered scanlines of up to 16 million pixels: the old 800 KB cap refused anything bigger
+ * than about 500x500 in colour, which ruled out any screen-sized picture */
+#define MAX_RAW_SIZE (64u * 1024u * 1024u)
 
 typedef struct {
     short count[MAXBITS + 1];
@@ -275,45 +277,39 @@ static void seterr(char *err, int cap, const char *msg)
     err[i] = 0;
 }
 
-int png_decode(const uint8_t *file, uint32_t file_len, uint8_t **out_rgb,
-                uint32_t *out_w, uint32_t *out_h, char *err, int err_cap)
+/*
+ * Every PNG the format allows: bit depths 1, 2, 4, 8 and 16, grey, RGB, palette, grey+alpha
+ * and RGBA, Adam7 interlacing, and tRNS transparency. The result is 8-bit RGBA.
+ */
+int png_decode_rgba(const uint8_t *file, uint32_t file_len, uint8_t **out_rgba,
+                    uint32_t *out_w, uint32_t *out_h, char *err, int err_cap)
 {
     static const uint8_t png_sig[8] = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
-    if (file_len < 8 || PNG_MEMCMP(file, png_sig, 8) != 0) {
-        seterr(err, err_cap, "not a PNG file");
-        return -1;
-    }
+    if (file_len < 8 || PNG_MEMCMP(file, png_sig, 8) != 0) { seterr(err, err_cap, "not a PNG file"); return -1; }
 
-    uint32_t pos = 8;
-    uint32_t width = 0, height = 0;
-    uint8_t bitdepth = 0, colortype = 0;
-    static uint8_t palette[256][3];
-    int pal_count = 0;
-    int have_ihdr = 0;
-
+    uint32_t pos = 8, width = 0, height = 0;
+    uint8_t bitdepth = 0, colortype = 0, interlace = 0;
+    static uint8_t palette[256][4];
+    int pal_count = 0, have_ihdr = 0;
+    int trns_gray = -1, trns_r = -1, trns_g = -1, trns_b = -1;
     uint8_t *idat = NULL;
     uint32_t idat_len = 0, idat_cap = 0;
+    for (int i = 0; i < 256; i++) palette[i][3] = 255;
 
     while (pos + 8 <= file_len) {
         uint32_t clen = be32(file + pos);
-        const uint8_t *ctype = file + pos + 4;
-        const uint8_t *cdata = file + pos + 8;
+        const uint8_t *ctype = file + pos + 4, *cdata = file + pos + 8;
         if ((uint64_t)pos + 8 + (uint64_t)clen + 4 > file_len) {
             seterr(err, err_cap, "truncated PNG chunk");
             if (idat) PNG_FREE(idat);
             return -1;
         }
-
         if (PNG_MEMCMP(ctype, "IHDR", 4) == 0) {
             if (clen < 13) { seterr(err, err_cap, "bad IHDR"); if (idat) PNG_FREE(idat); return -1; }
-            width = be32(cdata);
-            height = be32(cdata + 4);
-            bitdepth = cdata[8];
-            colortype = cdata[9];
-            uint8_t compression = cdata[10];
-            uint8_t interlace = cdata[12];
-            if (compression != 0 || interlace != 0) {
-                seterr(err, err_cap, "unsupported PNG (interlaced or unknown compression)");
+            width = be32(cdata); height = be32(cdata + 4);
+            bitdepth = cdata[8]; colortype = cdata[9]; interlace = cdata[12];
+            if (cdata[10] != 0 || interlace > 1) {
+                seterr(err, err_cap, "unknown PNG compression or interlace method");
                 if (idat) PNG_FREE(idat);
                 return -1;
             }
@@ -321,10 +317,12 @@ int png_decode(const uint8_t *file, uint32_t file_len, uint8_t **out_rgb,
         } else if (PNG_MEMCMP(ctype, "PLTE", 4) == 0) {
             pal_count = (int)(clen / 3);
             if (pal_count > 256) pal_count = 256;
-            for (int i = 0; i < pal_count; i++) {
-                palette[i][0] = cdata[i * 3 + 0];
-                palette[i][1] = cdata[i * 3 + 1];
-                palette[i][2] = cdata[i * 3 + 2];
+            for (int i = 0; i < pal_count; i++) { palette[i][0] = cdata[i * 3]; palette[i][1] = cdata[i * 3 + 1]; palette[i][2] = cdata[i * 3 + 2]; }
+        } else if (PNG_MEMCMP(ctype, "tRNS", 4) == 0) {
+            if (colortype == 3) { for (uint32_t i = 0; i < clen && i < 256; i++) palette[i][3] = cdata[i]; }
+            else if (colortype == 0 && clen >= 2) trns_gray = (int)((cdata[0] << 8) | cdata[1]);
+            else if (colortype == 2 && clen >= 6) {
+                trns_r = (cdata[0] << 8) | cdata[1]; trns_g = (cdata[2] << 8) | cdata[3]; trns_b = (cdata[4] << 8) | cdata[5];
             }
         } else if (PNG_MEMCMP(ctype, "IDAT", 4) == 0) {
             if (idat_len + clen > idat_cap) {
@@ -333,27 +331,16 @@ int png_decode(const uint8_t *file, uint32_t file_len, uint8_t **out_rgb,
                 uint8_t *nb = (uint8_t *)PNG_MALLOC(newcap);
                 if (!nb) { seterr(err, err_cap, "out of memory"); if (idat) PNG_FREE(idat); return -1; }
                 if (idat) { memcpy(nb, idat, idat_len); PNG_FREE(idat); }
-                idat = nb;
-                idat_cap = newcap;
+                idat = nb; idat_cap = newcap;
             }
             memcpy(idat + idat_len, cdata, clen);
             idat_len += clen;
-        } else if (PNG_MEMCMP(ctype, "IEND", 4) == 0) {
-            pos += 8 + clen + 4;
-            break;
-        }
-
+        } else if (PNG_MEMCMP(ctype, "IEND", 4) == 0) break;
         pos += 8 + clen + 4;
     }
-
     if (!have_ihdr || !idat || width == 0 || height == 0) {
         seterr(err, err_cap, "missing IHDR/IDAT");
         if (idat) PNG_FREE(idat);
-        return -1;
-    }
-    if (bitdepth != 8) {
-        seterr(err, err_cap, "unsupported bit depth (only 8-bit PNGs)");
-        PNG_FREE(idat);
         return -1;
     }
 
@@ -364,142 +351,142 @@ int png_decode(const uint8_t *file, uint32_t file_len, uint8_t **out_rgb,
         case 3: channels = 1; break;
         case 4: channels = 2; break;
         case 6: channels = 4; break;
-        default:
-            seterr(err, err_cap, "unsupported PNG color type");
-            PNG_FREE(idat);
-            return -1;
+        default: seterr(err, err_cap, "unsupported PNG color type"); PNG_FREE(idat); return -1;
     }
-    if (colortype == 3 && pal_count == 0) {
-        seterr(err, err_cap, "palette PNG missing PLTE");
-        PNG_FREE(idat);
-        return -1;
-    }
+    int depth_ok = (bitdepth == 8 || bitdepth == 16) ||
+                   ((colortype == 0 || colortype == 3) && (bitdepth == 1 || bitdepth == 2 || bitdepth == 4));
+    if (!depth_ok || (colortype == 3 && bitdepth == 16)) { seterr(err, err_cap, "invalid PNG bit depth"); PNG_FREE(idat); return -1; }
+    if (colortype == 3 && pal_count == 0) { seterr(err, err_cap, "palette PNG missing PLTE"); PNG_FREE(idat); return -1; }
 
-    /* width/height/channels all trace back to attacker-controlled
-     * IHDR bytes -- computing stride in 32-bit let width*channels
-     * silently wrap (e.g. width=0x40000001, channels=4 wraps to a
-     * tiny stride), passing the MAX_RAW_SIZE check below with a
-     * stride far smaller than the real width implies. `pixels`
-     * further down then gets allocated using that undersized stride,
-     * while the final RGB conversion loop still iterates the real
-     * (huge, un-wrapped) `width` when indexing into it -- an
-     * out-of-bounds heap read driven entirely by the file's own
-     * width/colortype fields. Do the multiplication in 64-bit and
-     * validate before it's ever narrowed back to 32-bit. */
-    uint64_t stride64 = (uint64_t)width * (uint64_t)channels;
-    uint64_t raw_cap64 = (stride64 + 1) * (uint64_t)height;
-    if (stride64 == 0 || raw_cap64 > MAX_RAW_SIZE) {
+    /* the seven Adam7 passes, or one pass covering everything */
+    static const int ax0[7] = { 0, 4, 0, 2, 0, 1, 0 }, ay0[7] = { 0, 0, 4, 0, 2, 0, 1 };
+    static const int adx[7] = { 8, 8, 4, 4, 2, 2, 1 }, ady[7] = { 8, 8, 8, 4, 4, 2, 2 };
+    int npass = interlace ? 7 : 1;
+    uint64_t bits_pp = (uint64_t)channels * bitdepth;
+    uint32_t fbpp = (uint32_t)((bits_pp + 7) / 8);            /* bytes per pixel, for the filters */
+    uint64_t raw_need = 0;
+    uint32_t pw[7], ph[7], prow[7];
+    for (int p = 0; p < npass; p++) {
+        uint32_t x0 = interlace ? (uint32_t)ax0[p] : 0, y0 = interlace ? (uint32_t)ay0[p] : 0;
+        uint32_t dx = interlace ? (uint32_t)adx[p] : 1, dy = interlace ? (uint32_t)ady[p] : 1;
+        pw[p] = width > x0 ? (width - x0 + dx - 1) / dx : 0;
+        ph[p] = height > y0 ? (height - y0 + dy - 1) / dy : 0;
+        uint64_t rb = (pw[p] * bits_pp + 7) / 8;
+        if (rb > 0xFFFFFFF) { seterr(err, err_cap, "image too large"); PNG_FREE(idat); return -1; }
+        prow[p] = (uint32_t)rb;
+        if (pw[p] && ph[p]) raw_need += (rb + 1) * ph[p];
+    }
+    if (raw_need == 0 || raw_need > MAX_RAW_SIZE || (uint64_t)width * height > MAX_RAW_SIZE / 4) {
         seterr(err, err_cap, "image too large");
         PNG_FREE(idat);
         return -1;
     }
-    uint32_t stride = (uint32_t)stride64;
-    uint32_t raw_cap = (uint32_t)raw_cap64;
-
-    if (idat_len < 2) {
-        seterr(err, err_cap, "truncated zlib stream");
+    if (idat_len < 2 || (idat[0] & 0x0F) != 8 || (idat[1] & 0x20)) {
+        seterr(err, err_cap, "unsupported zlib stream");
         PNG_FREE(idat);
         return -1;
     }
-    uint8_t cmf = idat[0], flg = idat[1];
-    if ((cmf & 0x0F) != 8) {
-        seterr(err, err_cap, "unsupported zlib compression method");
-        PNG_FREE(idat);
-        return -1;
-    }
-    if (flg & 0x20) {
-        seterr(err, err_cap, "unsupported zlib preset dictionary");
-        PNG_FREE(idat);
-        return -1;
-    }
-
-    uint8_t *raw = (uint8_t *)PNG_MALLOC(raw_cap);
+    uint8_t *raw = (uint8_t *)PNG_MALLOC(raw_need);
     if (!raw) { seterr(err, err_cap, "out of memory"); PNG_FREE(idat); return -1; }
-
     bitreader_t br;
-    br.data = idat;
-    br.len = idat_len;
-    br.pos = 2;
-    br.bitbuf = 0;
-    br.bitcnt = 0;
-
+    br.data = idat; br.len = idat_len; br.pos = 2; br.bitbuf = 0; br.bitcnt = 0;
     uint32_t raw_len = 0;
-    int rc = inflate_raw(&br, raw, raw_cap, &raw_len);
+    int rc = inflate_raw(&br, raw, (uint32_t)raw_need, &raw_len);
     PNG_FREE(idat);
-    if (rc != 0 || raw_len != raw_cap) {
-        seterr(err, err_cap, "DEFLATE decode failed (corrupt PNG?)");
-        PNG_FREE(raw);
-        return -1;
-    }
+    if (rc != 0 || raw_len != raw_need) { seterr(err, err_cap, "DEFLATE decode failed (corrupt PNG?)"); PNG_FREE(raw); return -1; }
 
-    uint8_t *pixels = (uint8_t *)PNG_MALLOC((uint64_t)stride * height);
-    if (!pixels) { seterr(err, err_cap, "out of memory"); PNG_FREE(raw); return -1; }
+    uint8_t *rgba = (uint8_t *)PNG_MALLOC((uint64_t)width * height * 4);
+    if (!rgba) { seterr(err, err_cap, "out of memory"); PNG_FREE(raw); return -1; }
 
-    for (uint32_t y = 0; y < height; y++) {
-        const uint8_t *rowsrc = raw + (uint64_t)y * (stride + 1);
-        uint8_t ftype = rowsrc[0];
-        const uint8_t *rowdata = rowsrc + 1;
-        uint8_t *outrow = pixels + (uint64_t)y * stride;
-        const uint8_t *prevrow = (y == 0) ? NULL : pixels + (uint64_t)(y - 1) * stride;
-
-        for (uint32_t x = 0; x < stride; x++) {
-            uint8_t raw_byte = rowdata[x];
-            int a = (x >= (uint32_t)channels) ? outrow[x - channels] : 0;
-            int b = prevrow ? prevrow[x] : 0;
-            int c = (prevrow && x >= (uint32_t)channels) ? prevrow[x - channels] : 0;
-            uint8_t val;
-            switch (ftype) {
-                case 0: val = raw_byte; break;
-                case 1: val = (uint8_t)(raw_byte + a); break;
-                case 2: val = (uint8_t)(raw_byte + b); break;
-                case 3: val = (uint8_t)(raw_byte + (uint8_t)((a + b) / 2)); break;
-                case 4: {
-                    int p = a + b - c;
-                    int pa = p > a ? p - a : a - p;
-                    int pb = p > b ? p - b : b - p;
-                    int pc = p > c ? p - c : c - p;
-                    int pred = (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c);
-                    val = (uint8_t)(raw_byte + pred);
-                    break;
+    uint8_t *rp = raw;
+    uint32_t maxval = (1u << (bitdepth < 8 ? bitdepth : 8)) - 1;
+    for (int p = 0; p < npass; p++) {
+        if (!pw[p] || !ph[p]) continue;
+        uint32_t stride = prow[p];
+        uint8_t *prev = NULL;
+        for (uint32_t y = 0; y < ph[p]; y++) {
+            uint8_t ftype = rp[0];
+            uint8_t *row = rp + 1;
+            for (uint32_t x = 0; x < stride; x++) {
+                int a = x >= fbpp ? row[x - fbpp] : 0;
+                int b = prev ? prev[x] : 0;
+                int c = (prev && x >= fbpp) ? prev[x - fbpp] : 0;
+                switch (ftype) {
+                    case 0: break;
+                    case 1: row[x] = (uint8_t)(row[x] + a); break;
+                    case 2: row[x] = (uint8_t)(row[x] + b); break;
+                    case 3: row[x] = (uint8_t)(row[x] + ((a + b) >> 1)); break;
+                    case 4: {
+                        int q = a + b - c;
+                        int pa = q > a ? q - a : a - q, pb = q > b ? q - b : b - q, pc = q > c ? q - c : c - q;
+                        row[x] = (uint8_t)(row[x] + ((pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c)));
+                        break;
+                    }
+                    default:
+                        seterr(err, err_cap, "unsupported PNG filter type");
+                        PNG_FREE(rgba); PNG_FREE(raw);
+                        return -1;
                 }
-                default:
-                    seterr(err, err_cap, "unsupported PNG filter type");
-                    PNG_FREE(pixels);
-                    PNG_FREE(raw);
-                    return -1;
             }
-            outrow[x] = val;
+            uint32_t oy = interlace ? (uint32_t)ay0[p] + y * (uint32_t)ady[p] : y;
+            for (uint32_t x = 0; x < pw[p]; x++) {
+                uint32_t ox = interlace ? (uint32_t)ax0[p] + x * (uint32_t)adx[p] : x;
+                uint8_t *o = rgba + ((uint64_t)oy * width + ox) * 4;
+                uint32_t v[4] = { 0, 0, 0, 0 }, v16[4] = { 0, 0, 0, 0 };
+                for (int ch = 0; ch < channels; ch++) {
+                    if (bitdepth == 16) {
+                        const uint8_t *q = row + ((uint64_t)x * channels + ch) * 2;
+                        v16[ch] = (uint32_t)((q[0] << 8) | q[1]);
+                        v[ch] = q[0];
+                    } else if (bitdepth == 8) {
+                        v[ch] = v16[ch] = row[(uint64_t)x * channels + ch];
+                    } else {
+                        uint64_t bit = (uint64_t)x * bitdepth;
+                        uint32_t byte = row[bit / 8];
+                        v16[ch] = (byte >> (8 - bitdepth - (bit % 8))) & maxval;
+                        v[ch] = colortype == 3 ? v16[ch] : v16[ch] * 255 / maxval;
+                    }
+                }
+                switch (colortype) {
+                    case 0: o[0] = o[1] = o[2] = (uint8_t)v[0]; o[3] = (trns_gray >= 0 && (int)v16[0] == trns_gray) ? 0 : 255; break;
+                    case 2:
+                        o[0] = (uint8_t)v[0]; o[1] = (uint8_t)v[1]; o[2] = (uint8_t)v[2];
+                        o[3] = (trns_r >= 0 && (int)v16[0] == trns_r && (int)v16[1] == trns_g && (int)v16[2] == trns_b) ? 0 : 255;
+                        break;
+                    case 3: {
+                        uint32_t idx = v[0] < (uint32_t)pal_count ? v[0] : 0;
+                        o[0] = palette[idx][0]; o[1] = palette[idx][1]; o[2] = palette[idx][2]; o[3] = palette[idx][3];
+                        break;
+                    }
+                    case 4: o[0] = o[1] = o[2] = (uint8_t)v[0]; o[3] = (uint8_t)v[1]; break;
+                    default: o[0] = (uint8_t)v[0]; o[1] = (uint8_t)v[1]; o[2] = (uint8_t)v[2]; o[3] = (uint8_t)v[3]; break;
+                }
+            }
+            prev = row;
+            rp += stride + 1;
         }
     }
     PNG_FREE(raw);
-
-    uint8_t *rgb = (uint8_t *)PNG_MALLOC((uint64_t)width * height * 3);
-    if (!rgb) { seterr(err, err_cap, "out of memory"); PNG_FREE(pixels); return -1; }
-
-    for (uint32_t y = 0; y < height; y++) {
-        for (uint32_t x = 0; x < width; x++) {
-            const uint8_t *p = pixels + (uint64_t)y * stride + (uint64_t)x * channels;
-            uint8_t r, g, b;
-            switch (colortype) {
-                case 0: r = g = b = p[0]; break;
-                case 2: r = p[0]; g = p[1]; b = p[2]; break;
-                case 3: {
-                    int idx = p[0];
-                    if (idx >= pal_count) idx = 0;
-                    r = palette[idx][0]; g = palette[idx][1]; b = palette[idx][2];
-                    break;
-                }
-                case 4: r = g = b = p[0]; break;
-                default: r = p[0]; g = p[1]; b = p[2]; break;
-            }
-            uint8_t *out = rgb + ((uint64_t)y * width + x) * 3;
-            out[0] = r; out[1] = g; out[2] = b;
-        }
-    }
-    PNG_FREE(pixels);
-
-    *out_rgb = rgb;
+    *out_rgba = rgba;
     *out_w = width;
     *out_h = height;
+    return 0;
+}
+
+/* The older RGB interface: transparent parts are laid over white. */
+int png_decode(const uint8_t *file, uint32_t file_len, uint8_t **out_rgb,
+               uint32_t *out_w, uint32_t *out_h, char *err, int err_cap)
+{
+    uint8_t *rgba;
+    uint32_t w, h;
+    if (png_decode_rgba(file, file_len, &rgba, &w, &h, err, err_cap) != 0) return -1;
+    uint8_t *rgb = (uint8_t *)PNG_MALLOC((uint64_t)w * h * 3);
+    if (!rgb) { PNG_FREE(rgba); seterr(err, err_cap, "out of memory"); return -1; }
+    for (uint64_t i = 0; i < (uint64_t)w * h; i++) {
+        uint32_t a = rgba[i * 4 + 3];
+        for (int c = 0; c < 3; c++) rgb[i * 3 + c] = (uint8_t)((rgba[i * 4 + c] * a + 255 * (255 - a)) / 255);
+    }
+    PNG_FREE(rgba);
+    *out_rgb = rgb; *out_w = w; *out_h = h;
     return 0;
 }

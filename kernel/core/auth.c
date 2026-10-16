@@ -569,8 +569,16 @@ int auth_read_line(const char *prompt, char *out, int max, int echo)
     }
 }
 
+/* the graphical desktop's password dialog (wm_gfx.c), used when a window's task asks */
+extern int wm_gfx_mode;
+int wm_gfx_password_sheet(const char *prompt, char *out, int max);
+
 int auth_prompt_password(const char *prompt, char *out, int max)
 {
+    if (wm_gfx_mode && task_get_userdata()) {
+        int r = wm_gfx_password_sheet(prompt, out, max);
+        if (r != -2) return r;
+    }
     return auth_read_line(prompt, out, max, 0);
 }
 

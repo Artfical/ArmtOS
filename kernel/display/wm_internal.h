@@ -49,9 +49,11 @@ typedef struct {
     uint32_t g_sum;
     int panel;                       /* WIN_KIND_PANEL: which built-in pixel panel */
     int anim;                        /* frames left of the opening animation */
+    void *native;                    /* WIN_KIND_NATIVE: its uiapp_t */
 } window_t;
 
 #define WIN_KIND_PANEL       18   /* drawn by wm_gfx.c itself, no task behind it */
+#define WIN_KIND_NATIVE      19   /* a pixel app (uiapp.h), run by the desktop itself */
 
 extern window_t windows[MAX_WINDOWS];
 extern window_t *wm_focused;
@@ -78,5 +80,7 @@ void wm_gfx_tick(void);
 void wm_gfx_window_opened(window_t *w);
 void wm_gfx_restore_mode(void);
 int  wm_gfx_content_mouse(window_t *w, int *x, int *y);   /* pixel mouse -> content cell */
+int  wm_gfx_open_native(const char *id, const char *arg); /* 0 = opened */
+void wm_gfx_native_closed(window_t *w);
 
 #endif
