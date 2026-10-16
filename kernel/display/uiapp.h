@@ -72,4 +72,22 @@ int  ui_hit(int px, int py, int x, int y, int w, int h);
 void ui_num(char *out, int64_t v);            /* appends a decimal number */
 void ui_size(char *out, uint32_t bytes);      /* appends "12 KB" style */
 
+/* A file chooser drawn over an app: a folder listing, a name field, Open/Save and Cancel. */
+#include "uihost.h"
+typedef struct {
+    int active, saving;
+    char dir[160];
+    char name[64];
+    uihost_entry_t ents[96];
+    int n, scroll, sel;
+    uint32_t last_click_ms;
+    char result[224];          /* the chosen full path, once ui_filedlg_* returned 1 */
+} ui_filedlg_t;
+void ui_filedlg_open(ui_filedlg_t *d, int saving, const char *start_dir, const char *name);
+void ui_filedlg_draw(ui_filedlg_t *d, gfx_surface_t *s, int x, int y, int w, int h);
+int  ui_filedlg_press(ui_filedlg_t *d, int px, int py, int w, int h);   /* 1 chosen, -1 cancelled, 0 still open */
+int  ui_filedlg_key(ui_filedlg_t *d, int key);                          /* same */
+void ui_path_join(char *out, const char *dir, const char *name);
+const char *ui_basename(const char *path);
+
 #endif

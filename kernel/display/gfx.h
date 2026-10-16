@@ -47,6 +47,7 @@ void gfx_blit_tinted(gfx_surface_t *s, const gfx_image_t *im, int x, int y, uint
 
 /* the wallpaper, scaled to w x h (RGB in, 0x00RRGGBB out); `blurred` is a frosted copy */
 int  gfx_wallpaper(uint32_t *out, int w, int h, uint32_t *blurred);
+int  gfx_wallpaper_from(uint32_t *out, int w, int h, uint32_t *blurred, const uint8_t *src, int sw, int sh, int bpp);
 
 /* text: UTF-8, returns the advance width */
 int  gfx_text(gfx_surface_t *s, const ui_font_t *f, int x, int y, const char *str, uint32_t c, int alpha);

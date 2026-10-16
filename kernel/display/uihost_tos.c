@@ -78,7 +78,20 @@ int uihost_mkdir(const char *path) { return fsbridge_mkdir(path); }
 int uihost_delete(const char *path) { return fsbridge_delete(path); }
 int uihost_rename(const char *from, const char *to) { return fsbridge_rename(from, to); }
 
-void uihost_open(const char *app_id, const char *path) { wm_gfx_open_native(app_id, path); }
+void uihost_open(const char *app_id, const char *path)
+{
+    if (wm_gfx_open_native(app_id, path) == 0) return;
+    /* the apps that are still the classic character-cell ones */
+    if (!strcmp(app_id, "pdf") && path) wm_open_pdfviewer_file(path);
+    else if (!strcmp(app_id, "run") && path) {
+        char cmd[64] = "run ";
+        int o = 4;
+        for (const char *q = path; *q && o < (int)sizeof(cmd) - 1; q++) cmd[o++] = *q;
+        cmd[o] = 0;
+        wm_open_terminal(cmd);
+    } else if (!strcmp(app_id, "music")) wm_open_app("mediaplayer");
+    else wm_open_app(app_id);
+}
 
 static uihost_task_t *t_out;
 static int t_n, t_max;

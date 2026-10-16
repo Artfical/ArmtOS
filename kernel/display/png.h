@@ -5,6 +5,9 @@
 
 int png_decode(const uint8_t *file, uint32_t file_len, uint8_t **out_rgb,
                 uint32_t *out_w, uint32_t *out_h, char *err, int err_cap);
+/* the same, keeping transparency: 8-bit RGBA, any PNG bit depth, colour type or interlacing */
+int png_decode_rgba(const uint8_t *file, uint32_t file_len, uint8_t **out_rgba,
+                    uint32_t *out_w, uint32_t *out_h, char *err, int err_cap);
 
 /* Decompresses a raw (no zlib wrapper) DEFLATE stream — the same
  * inflate engine png_decode() uses internally for IDAT data, exposed

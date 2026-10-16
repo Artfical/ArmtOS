@@ -278,25 +278,22 @@ void gfx_shadow(gfx_surface_t *s, int x, int y, int w, int h, int strength)
 
 /* ---- wallpaper ---- */
 
-int gfx_wallpaper(uint32_t *out, int w, int h, uint32_t *blurred)
+/* Any picture as the wallpaper: scaled to cover the screen (cropping the longer side, never
+ * stretching), then a frosted copy for the glass bars. `bpp` is 3 (RGB) or 4 (RGBA). */
+int gfx_wallpaper_from(uint32_t *out, int w, int h, uint32_t *blurred, const uint8_t *src, int sw, int sh, int bpp)
 {
-    int idx = -1;
-    for (int i = 0; i < ui_image_count; i++) if (!strcmp(ui_images[i].name, "wallpaper")) idx = i;
-    if (idx < 0 || !assets) return -1;
-    const uint8_t *src = assets + ui_images[idx].off;
-    int sw = ui_images[idx].w, sh = ui_images[idx].h;
-    /* cover the screen, cropping the longer side, so the picture never stretches */
+    if (!src || sw <= 0 || sh <= 0) return -1;
     int scale_num, scale_den;
-    if (w * sh > h * sw) { scale_num = sw; scale_den = w; }
+    if ((int64_t)w * sh > (int64_t)h * sw) { scale_num = sw; scale_den = w; }
     else { scale_num = sh; scale_den = h; }
-    int offx = (int)((sw - w * scale_num / scale_den) / 2), offy = (int)((sh - h * scale_num / scale_den) / 2);
+    int offx = (sw - (int)((int64_t)w * scale_num / scale_den)) / 2, offy = (sh - (int)((int64_t)h * scale_num / scale_den)) / 2;
     for (int y = 0; y < h; y++) {
-        int sy = offy + (int)(y * scale_num / scale_den);
+        int sy = offy + (int)((int64_t)y * scale_num / scale_den);
         if (sy >= sh) sy = sh - 1;
         for (int x = 0; x < w; x++) {
-            int sx = offx + (int)(x * scale_num / scale_den);
+            int sx = offx + (int)((int64_t)x * scale_num / scale_den);
             if (sx >= sw) sx = sw - 1;
-            const uint8_t *p = src + (sy * sw + sx) * 3;
+            const uint8_t *p = src + ((size_t)sy * sw + sx) * bpp;
             out[y * w + x] = gfx_rgb(p[0], p[1], p[2]);
         }
     }
@@ -341,6 +338,14 @@ int gfx_wallpaper(uint32_t *out, int w, int h, uint32_t *blurred)
     }
     free(line);
     return 0;
+}
+
+int gfx_wallpaper(uint32_t *out, int w, int h, uint32_t *blurred)
+{
+    int idx = -1;
+    for (int i = 0; i < ui_image_count; i++) if (!strcmp(ui_images[i].name, "wallpaper")) idx = i;
+    if (idx < 0 || !assets) return -1;
+    return gfx_wallpaper_from(out, w, h, blurred, assets + ui_images[idx].off, ui_images[idx].w, ui_images[idx].h, 3);
 }
 
 /* ---- text ---- */

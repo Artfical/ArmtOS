@@ -1,6 +1,7 @@
 #include "../uiapp.h"
 #include "../uihost.h"
 #include "string.h"
+#include "memory.h"
 
 /* 2048, with tiles that look like the original's. */
 

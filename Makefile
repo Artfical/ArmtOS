@@ -195,6 +195,15 @@ KERNEL_OBJS = \
     kernel/display/apps/calc.o \
     kernel/display/apps/clock.o \
     kernel/display/apps/g2048.o \
+    kernel/display/apps/notepad2.o \
+    kernel/display/apps/files.o \
+    kernel/display/apps/viewer2.o \
+    kernel/display/apps/activity.o \
+    kernel/display/apps/network.o \
+    kernel/display/apps/paint2.o \
+    kernel/display/apps/notes.o \
+    kernel/display/imgload.o \
+    kernel/display/jpeg.o \
     kernel/display/notepad.o \
     kernel/display/clock.o \
     kernel/display/about.o \

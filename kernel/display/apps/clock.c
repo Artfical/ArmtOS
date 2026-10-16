@@ -1,6 +1,7 @@
 #include "../uiapp.h"
 #include "../uihost.h"
 #include "string.h"
+#include "memory.h"
 
 /* Clock: an analog face, the time and date, and a stopwatch. */
 

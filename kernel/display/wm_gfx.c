@@ -15,6 +15,8 @@
 #include "io.h"
 #include "uiapp.h"
 #include "keyboard.h"
+#include "uihost.h"
+#include "imgload.h"
 
 /*
  * The graphical desktop.
@@ -82,6 +84,7 @@ static int hover_dock = -1, hover_launch = -1, hover_menu = -1, hover_lights;
 static int dock_magnify = 1;
 static int wallpaper_choice;          /* 0 dusk (picture), 1 ocean, 2 graphite */
 static int mouse_speed = 1;
+static int eth_icon_x = -100;          /* where the Ethernet icon is in the top bar: a click opens Network */
 
 /* ------------------------------------------------------------------ apps */
 
@@ -248,7 +251,7 @@ static void set_cells(window_t *w, int cols, int rows)
 
 static void panel_size(int panel, int *pw, int *ph)
 {
-    if (panel == PANEL_SETTINGS) { *pw = 620; *ph = 470; }
+    if (panel == PANEL_SETTINGS) { *pw = 640; *ph = 470; }
     else { *pw = 440; *ph = 380; }
 }
 
@@ -696,7 +699,8 @@ static void draw_topbar(void)
     rx -= 28;
     gfx_blit(&bs, gfx_image("glyph_volume-2"), rx, 6, 230);
     rx -= 28;
-    gfx_blit(&bs, gfx_image("glyph_ethernet-port"), rx, 6, net_ip ? 230 : 90);   /* wired: tOS has no Wi-Fi */
+    gfx_blit(&bs, gfx_image("glyph_ethernet-port"), rx, 6, net_ip ? 230 : 90);
+    eth_icon_x = rx;   /* wired: tOS has no Wi-Fi */
 }
 
 /* dock layout: index 0 is the launcher, then the dock apps, then the trash */
@@ -880,6 +884,14 @@ static void draw_settings(int x, int y, int w, int h)
         gfx_gradient_v(&tmp, bx, py, 130, 76, wa[i][0], wa[i][1]);
         gfx_text_center(&bs, &ui_font_regular, bx, py + 84, 130, wn[i], C_TEXT, 255);
     }
+    {
+        int bx = px + 3 * 150;
+        gfx_rrect(&bs, bx - 3, py - 3, 136, 82, 10, wallpaper_choice == 3 ? C_ACCENT : 0x1E1F25, 255);
+        gfx_rrect(&bs, bx, py, 130, 76, 8, 0x2A2B33, 255);
+        gfx_blit(&bs, icon("viewer", 0), bx + 55, py + 18, 255);
+        gfx_text_center(&bs, &ui_font_small, bx, py + 46, 130, "PNG or JPEG", C_TEXT_DIM, 255);
+        gfx_text_center(&bs, &ui_font_regular, bx, py + 84, 130, "Picture...", C_TEXT, 255);
+    }
     py += 118;
 
     section(px, py, "DOCK"); py += 22;
@@ -900,6 +912,7 @@ static void click_settings(int lx, int ly)
     py += 54 + 22;
     for (int i = 0; i < 3; i++)
         if (lx >= px + i * 150 && lx < px + i * 150 + 130 && ly >= py && ly < py + 76) { set_wallpaper(i); return; }
+    if (lx >= px + 450 && lx < px + 580 && ly >= py && ly < py + 76) { wm_gfx_open_native("files", 0); return; }
     py += 118 + 22;
     if (lx >= px && lx < px + 220 && ly >= py && ly < py + 32) { dock_magnify = !dock_magnify; return; }
     py += 54 + 22;
@@ -1022,9 +1035,51 @@ static void shutdown_screen(void)
 
 /* ------------------------------------------------------------------ wallpaper, mode */
 
+static char custom_wallpaper[224];
+
+static int load_custom_wallpaper(const char *path)
+{
+    uint8_t *rgba;
+    uint32_t w, h;
+    const char *err;
+    if (img_load(path, &rgba, &w, &h, &err) != 0) return -1;
+    gfx_wallpaper_from(wall, SW, SH, wall_blur, rgba, (int)w, (int)h, 4);
+    free(rgba);
+    return 0;
+}
+
+static void wallpaper_pref_path(char *out)
+{
+    strcpy(out, uihost_home());
+    if (strcmp(out, "/")) strcat(out, "/");
+    strcat(out, ".wallpaper");
+}
+
+/* Settings and Files call this: a PNG or JPEG becomes the wallpaper, and stays it after a
+ * restart (the path is kept in ~/.wallpaper). */
+int uihost_set_wallpaper(const char *path)
+{
+    if (load_custom_wallpaper(path) != 0) return -1;
+    strncpy(custom_wallpaper, path, sizeof(custom_wallpaper) - 1);
+    wallpaper_choice = 3;
+    char pref[96];
+    wallpaper_pref_path(pref);
+    uihost_write(pref, path, (uint32_t)strlen(path));
+    dirty = 1;
+    return 0;
+}
+
 static void set_wallpaper(int choice)
 {
     wallpaper_choice = choice;
+    if (choice == 3 && custom_wallpaper[0] && load_custom_wallpaper(custom_wallpaper) == 0) { dirty = 1; return; }
+    if (choice == 3) wallpaper_choice = choice = 0;
+    if (choice != 0) {
+        /* a built-in gradient chosen: forget the picture */
+        char pref[96];
+        wallpaper_pref_path(pref);
+        if (custom_wallpaper[0]) { uihost_delete(pref); custom_wallpaper[0] = 0; }
+    }
     if (choice == 0) gfx_wallpaper(wall, SW, SH, wall_blur);
     else {
         uint32_t top = choice == 1 ? 0x0B3A66 : 0x2A2C33, bot = choice == 1 ? 0x2BB3C9 : 0x5A5F6B;
@@ -1097,6 +1152,19 @@ int wm_gfx_init(void)
     if (bochs_set_mode(&vdev, SW, SH, 32) != 0) return -1;
     lfb = (uint32_t *)vdev.lfb;
     set_wallpaper(0);
+    /* the picture chosen last time, if there was one */
+    {
+        char pref[96];
+        wallpaper_pref_path(pref);
+        uint8_t *d; uint32_t n;
+        if (uihost_read(pref, &d, &n) == 0) {
+            char path[224];
+            uint32_t k = n < sizeof(path) - 1 ? n : sizeof(path) - 1;
+            memcpy(path, d, k); path[k] = 0;
+            free(d);
+            if (load_custom_wallpaper(path) == 0) { strcpy(custom_wallpaper, path); wallpaper_choice = 3; }
+        }
+    }
     mouse_set_pixel_mode(SW, SH);
     mx = SW / 2; my = SH / 2;
     dirty = 1;
@@ -1164,6 +1232,7 @@ static void press(int x, int y)
                 return;
             }
         if (x >= menu_label_x[3] && x < menu_label_x[3] + menu_label_w[3]) { launcher_open = 1; dirty = 1; }
+        else if (x >= eth_icon_x - 6 && x < eth_icon_x + 22) wm_gfx_open_native("netmon", 0);
         return;
     }
     int d = dock_hit(x, y);
