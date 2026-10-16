@@ -8,6 +8,7 @@
 
 int mailbox_board_revision(uint32_t *out);
 int mailbox_arm_memory(uint32_t *bytes);
+int mailbox_tag(uint32_t tag, uint32_t *words, int nin, int nout);   /* generic: 0 = answered */
 int mailbox_mac_address(uint8_t mac[6]);   /* the address the firmware gives this board's Ethernet */
 /* Requests a linear framebuffer; returns its address, geometry, and the pixel order the
  * firmware actually settled on (1 = RGB, 0 = BGR) -- it does not always honour the request,

@@ -7,6 +7,7 @@
 
 static uint32_t part_lba;
 static uint32_t fat_begin, cluster_begin, sectors_per_cluster, root_cluster;
+static uint32_t num_fats_g, fat_size_g, fsinfo_sector, total_clusters;
 static int mounted;
 
 static uint8_t sec[512] __attribute__((aligned(8)));
@@ -43,6 +44,11 @@ int fat_mount(void)
 
     fat_begin = part_lba + reserved;
     cluster_begin = fat_begin + num_fats * fat_size;
+    num_fats_g = num_fats;
+    fat_size_g = fat_size;
+    fsinfo_sector = rd16(sec + 48);
+    uint32_t total = rd16(sec + 19) ? rd16(sec + 19) : rd32(sec + 32);
+    total_clusters = (total - reserved - num_fats * fat_size) / sectors_per_cluster;
     mounted = 1;
     return 0;
 }
@@ -137,4 +143,178 @@ int fat_read_file(const char *name, uint8_t *buf, uint32_t max)
         cluster = next_cluster(cluster);
     }
     return (int)got;
+}
+
+/* ---- writing ----------------------------------------------------------------------------
+ * Enough to keep small files in the root directory (config.txt above all): overwrite a file
+ * in place, grow or shrink its cluster chain, or create it. Long file names and
+ * subdirectories are not written. Every change goes to every copy of the FAT. */
+
+static uint8_t wsec[512] __attribute__((aligned(8)));
+static uint8_t fsec[512] __attribute__((aligned(8)));
+
+static void wr32(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
+}
+
+/* Sets one FAT entry in every copy of the table. */
+static int set_fat(uint32_t cluster, uint32_t value)
+{
+    uint32_t off = cluster * 4;
+    for (uint32_t f = 0; f < num_fats_g; f++) {
+        uint32_t lba = fat_begin + f * fat_size_g + off / 512;
+        if (emmc_read(lba, 1, fsec) < 0) return -1;
+        uint32_t old = rd32(fsec + off % 512);
+        wr32(fsec + off % 512, (old & 0xF0000000u) | (value & 0x0FFFFFFFu));
+        if (emmc_write(lba, 1, fsec) < 0) return -1;
+    }
+    return 0;
+}
+
+static uint32_t alloc_cluster(void)
+{
+    uint32_t per_sector = 128;
+    for (uint32_t sct = 0; sct < fat_size_g; sct++) {
+        if (emmc_read(fat_begin + sct, 1, fsec) < 0) return 0;
+        for (uint32_t i = 0; i < per_sector; i++) {
+            uint32_t c = sct * per_sector + i;
+            if (c < 3 || c >= total_clusters + 2) continue;
+            if ((rd32(fsec + i * 4) & 0x0FFFFFFF) == 0) {
+                if (set_fat(c, 0x0FFFFFFF) != 0) return 0;
+                return c;
+            }
+        }
+    }
+    return 0;
+}
+
+/* Frees a chain starting at `c`. */
+static void free_chain(uint32_t c)
+{
+    while (c >= 2 && c < 0x0FFFFFF8) {
+        uint32_t n = next_cluster(c);
+        set_fat(c, 0);
+        c = n;
+    }
+}
+
+/* The free-space figures in the FSInfo sector are only hints; after a change they are marked
+ * unknown so no driver trusts a stale count. */
+static void fsinfo_invalidate(void)
+{
+    if (fsinfo_sector == 0 || fsinfo_sector == 0xFFFF) return;
+    if (emmc_read(part_lba + fsinfo_sector, 1, fsec) < 0) return;
+    if (rd32(fsec) != 0x41615252 || rd32(fsec + 484) != 0x61417272) return;
+    wr32(fsec + 488, 0xFFFFFFFF);
+    wr32(fsec + 492, 0xFFFFFFFF);
+    emmc_write(part_lba + fsinfo_sector, 1, fsec);
+}
+
+static int to_83(const char *name, uint8_t *out)
+{
+    memset(out, ' ', 11);
+    int i = 0, o = 0;
+    for (; name[i] && name[i] != '.'; i++) {
+        if (o >= 8) return -1;
+        char c = name[i];
+        out[o++] = (uint8_t)((c >= 'a' && c <= 'z') ? c - 32 : c);
+    }
+    if (name[i] == '.') {
+        i++;
+        for (o = 8; name[i]; i++) {
+            if (o >= 11) return -1;
+            char c = name[i];
+            out[o++] = (uint8_t)((c >= 'a' && c <= 'z') ? c - 32 : c);
+        }
+    }
+    return 0;
+}
+
+int fat_write_file(const char *name, const uint8_t *data, uint32_t len)
+{
+    if (!mounted) return -1;
+    uint8_t n11[11];
+    if (to_83(name, n11) != 0) return -1;
+
+    /* find the entry, remembering the first free slot in case it has to be created */
+    uint64_t ent_lba = 0, free_lba = 0;
+    int ent_off = -1, free_off = -1;
+    uint32_t start = 0;
+    uint32_t dc = root_cluster;
+    int done = 0;
+    while (!done && dc >= 2 && dc < 0x0FFFFFF8) {
+        for (uint32_t s = 0; s < sectors_per_cluster && !done; s++) {
+            uint64_t lba = cluster_lba(dc) + s;
+            if (emmc_read(lba, 1, wsec) < 0) return -1;
+            for (int i = 0; i < 512; i += 32) {
+                const uint8_t *e = wsec + i;
+                if (e[0] == 0x00 || e[0] == 0xE5) {
+                    if (free_off < 0) { free_lba = lba; free_off = i; }
+                    if (e[0] == 0x00) { done = 1; break; }
+                    continue;
+                }
+                if ((e[11] & 0x0F) == 0x0F || (e[11] & 0x18)) continue;
+                if (!memcmp(e, n11, 11)) {
+                    ent_lba = lba; ent_off = i;
+                    start = ((uint32_t)rd16(e + 20) << 16) | rd16(e + 26);
+                    done = 1;
+                    break;
+                }
+            }
+        }
+        if (!done) dc = next_cluster(dc);
+    }
+    int creating = ent_off < 0;
+    if (creating && free_off < 0) return -1;            /* the directory is full */
+
+    if (start < 2) {
+        start = alloc_cluster();
+        if (!start) return -1;
+    }
+
+    /* write the data, extending the chain when it runs out */
+    uint32_t cur = start, done_bytes = 0, bytes_per_cluster = sectors_per_cluster * 512;
+    for (;;) {
+        for (uint32_t s = 0; s < sectors_per_cluster; s++) {
+            if (done_bytes >= len) break;
+            uint32_t n = len - done_bytes;
+            if (n > 512) n = 512;
+            memset(wsec, 0, 512);
+            memcpy(wsec, data + done_bytes, n);
+            if (emmc_write(cluster_lba(cur) + s, 1, wsec) < 0) return -1;
+            done_bytes += n;
+        }
+        if (done_bytes >= len) break;
+        uint32_t nx = next_cluster(cur);
+        if (nx < 2 || nx >= 0x0FFFFFF8) {
+            nx = alloc_cluster();
+            if (!nx || set_fat(cur, nx) != 0) return -1;
+        }
+        cur = nx;
+        (void)bytes_per_cluster;
+    }
+    /* whatever of the old chain is left over is released */
+    uint32_t tail = next_cluster(cur);
+    set_fat(cur, 0x0FFFFFFF);
+    if (tail >= 2 && tail < 0x0FFFFFF8) free_chain(tail);
+
+    /* the directory entry */
+    uint64_t lba = creating ? free_lba : ent_lba;
+    int off = creating ? free_off : ent_off;
+    if (emmc_read(lba, 1, wsec) < 0) return -1;
+    uint8_t *e = wsec + off;
+    if (creating) {
+        memset(e, 0, 32);
+        memcpy(e, n11, 11);
+        e[11] = 0x20;                                       /* archive */
+        e[16] = e[18] = e[24] = 0x21; e[17] = e[19] = e[25] = 0x5C;   /* 2026-01-01: no clock at this layer */
+    }
+    e[20] = (uint8_t)(start >> 16); e[21] = (uint8_t)(start >> 24);
+    e[26] = (uint8_t)start;         e[27] = (uint8_t)(start >> 8);
+    wr32(e + 28, len);
+    if (emmc_write(lba, 1, wsec) < 0) return -1;
+
+    fsinfo_invalidate();
+    return (int)len;
 }

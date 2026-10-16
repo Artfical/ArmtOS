@@ -10,6 +10,8 @@
 
 int fat_mount(void);                                      /* finds and mounts the first FAT partition */
 int fat_read_file(const char *name, uint8_t *buf, uint32_t max);   /* bytes read, or -1 */
+/* Writes a whole file in the root directory (8.3 name): replaces it, resizes it or creates it. */
+int fat_write_file(const char *name, const uint8_t *data, uint32_t len);   /* bytes written, or -1 */
 int fat_list(void (*cb)(const char *name, uint32_t size));
 
 #endif

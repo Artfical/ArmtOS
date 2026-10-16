@@ -6,6 +6,22 @@
 #include "fb.h"
 #include "bcm.h"
 #include "irq.h"
+#include "cfgfile.h"
+#include "uart.h"
+
+/* raspi-config's switches are honoured: with a readable config.txt, a bus that is not switched
+ * on in it (dtparam=i2c_arm=on, dtparam=spi=on) is not available, as on Raspberry Pi OS. */
+static int bus_allowed(const char *bus, const char *fix)
+{
+    if (bootcfg_interface_allowed(bus)) return 1;
+    uart_puts(bus);
+    uart_puts(" is switched off in config.txt -- enable it with: raspi-config nonint ");
+    uart_puts(fix);
+    uart_puts(" 0   (then reboot)\n");
+    return 0;
+}
+#define NEED_I2C() do { if (!bus_allowed("i2c", "do_i2c")) return -1; } while (0)
+#define NEED_SPI() do { if (!bus_allowed("spi", "do_spi")) return -1; } while (0)
 
 /* Which PWM channel a pin belongs to, or -1 if it cannot do PWM at all. */
 static int pwm_channel_for(int pin)
@@ -45,22 +61,25 @@ int hw_analog_write(int pin, int value)
 
 int hw_analog_read(int channel)
 {
+    NEED_SPI();
     if (spi_init(1000000) != 0) return -1;
     return spi_adc_read(0, channel);
 }
 
-int hw_i2c_setup(int hz) { return i2c_init((uint32_t)(hz > 0 ? hz : 100000)); }
-int hw_i2c_write(int addr, const uint8_t *data, int len) { return i2c_write((uint8_t)addr, data, len); }
-int hw_i2c_read(int addr, uint8_t *data, int len)        { return i2c_read((uint8_t)addr, data, len); }
+int hw_i2c_setup(int hz) { NEED_I2C(); return i2c_init((uint32_t)(hz > 0 ? hz : 100000)); }
+int hw_i2c_write(int addr, const uint8_t *data, int len) { NEED_I2C(); return i2c_write((uint8_t)addr, data, len); }
+int hw_i2c_read(int addr, uint8_t *data, int len)        { NEED_I2C(); return i2c_read((uint8_t)addr, data, len); }
 int hw_i2c_read_reg(int addr, int reg, uint8_t *data, int len)
 {
+    NEED_I2C();
     return i2c_read_reg((uint8_t)addr, (uint8_t)reg, data, len);
 }
-int hw_i2c_scan(uint8_t *found, int max) { return i2c_scan(found, max); }
+int hw_i2c_scan(uint8_t *found, int max) { NEED_I2C(); return i2c_scan(found, max); }
 
-int hw_spi_setup(int hz) { return spi_init((uint32_t)(hz > 0 ? hz : 1000000)); }
+int hw_spi_setup(int hz) { NEED_SPI(); return spi_init((uint32_t)(hz > 0 ? hz : 1000000)); }
 int hw_spi_transfer(int cs, const uint8_t *tx, uint8_t *rx, int len)
 {
+    NEED_SPI();
     return spi_transfer(cs, tx, rx, len);
 }
 

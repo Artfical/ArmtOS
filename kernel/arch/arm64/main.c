@@ -18,6 +18,7 @@
 #include "version.h"
 
 int net_command(int argc, char **argv);
+int raspi_command(int argc, char **argv);
 
 /* What the firmware hands over, printed so a serial console shows the port is alive and
  * the board was identified before anything harder is attempted. */
@@ -72,7 +73,10 @@ void arm_main(void)
 
 /* ---- a small serial shell, so the board can be poked at before anything larger exists ---- */
 
-static int line_read(char *buf, int max)
+int shell_readline(char *buf, int max);
+static int line_read(char *buf, int max) { return shell_readline(buf, max); }
+
+int shell_readline(char *buf, int max)
 {
     int n = 0;
     for (;;) {
@@ -154,6 +158,7 @@ void shell(void)
             uart_puts("ls              list the programs on the card\n");
             uart_puts("run NAME.t      run a program from the card\n");
             uart_puts("eth             bring the Ethernet up and show its address\n");
+            uart_puts("raspi-config    the Raspberry Pi configuration tool (config.txt); try: raspi-config nonint do_i2c 0\n");
             uart_puts("net             start the network stack (DHCP) and show its state\n");
             uart_puts("ping H          ICMP echo to a host name or address\n");
             uart_puts("dns H           resolve a host name\n");
@@ -339,6 +344,8 @@ void shell(void)
             for (;;) __asm__ volatile("wfe");
         } else if (net_command(argc, argv)) {
             /* handled by netcmd.c */
+        } else if (raspi_command(argc, argv)) {
+            /* handled by raspi.c */
         } else {
             uart_puts("unknown command: ");
             uart_puts(argv[0]);

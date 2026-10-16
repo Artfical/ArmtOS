@@ -61,6 +61,8 @@ OBJS := $(ARCH_DIR)/boot.arm.o \
         $(ARCH_DIR)/genet.arm.o \
         $(ARCH_DIR)/lan95xx.arm.o \
         $(ARCH_DIR)/usbnet.arm.o \
+        $(ARCH_DIR)/cfgfile.arm.o \
+        $(ARCH_DIR)/raspi.arm.o \
         $(ARCH_DIR)/main.arm.o
 
 MP_CORE := $(patsubst %.c,%.arm.o,$(filter-out %/persistentcode.c,$(wildcard kernel/micropython/py/*.c)))

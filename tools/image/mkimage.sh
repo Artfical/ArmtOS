@@ -37,6 +37,9 @@ enable_uart=1
 uart_2ndstage=1
 disable_commandline_tags=1
 core_freq_min=500
+# I2C and SPI on, so the header works out of the box; `raspi-config` edits these lines
+dtparam=i2c_arm=on
+dtparam=spi=on
 CFG
 mcopy -i "$part" /tmp/config.txt ::config.txt
 mcopy -i "$part" "$root/kernel8.img" ::kernel8.img

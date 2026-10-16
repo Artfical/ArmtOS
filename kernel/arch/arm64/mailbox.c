@@ -58,6 +58,25 @@ int mailbox_board_revision(uint32_t *out)
     return 0;
 }
 
+/* Any property tag whose request and answer are a few words: `words` carries the request in and
+ * the answer out. */
+int mailbox_tag(uint32_t tag, uint32_t *words, int nin, int nout)
+{
+    int n = nin > nout ? nin : nout;
+    if (n > 8) return -1;
+    mbox_buf[0] = (uint32_t)(5 + n + 1) * 4;
+    mbox_buf[1] = 0;
+    mbox_buf[2] = tag;
+    mbox_buf[3] = (uint32_t)n * 4;
+    mbox_buf[4] = 0;
+    for (int i = 0; i < n; i++) mbox_buf[5 + i] = i < nin ? words[i] : 0;
+    mbox_buf[5 + n] = 0;
+    if (mailbox_call() != 0) return -1;
+    if (!(mbox_buf[4] & 0x80000000u)) return -1;          /* the firmware did not answer this tag */
+    for (int i = 0; i < nout; i++) words[i] = mbox_buf[5 + i];
+    return 0;
+}
+
 int mailbox_mac_address(uint8_t mac[6])
 {
     mbox_buf[0] = 8 * 4;
