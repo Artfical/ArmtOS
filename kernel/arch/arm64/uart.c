@@ -43,8 +43,11 @@ configure_uart:
     mmio_write(PL011_CR, (1 << 0) | (1 << 8) | (1 << 9));   /* enable, TX, RX */
 }
 
+void (*uart_mirror)(char c);       /* the desktop's Terminal window, when it is up */
+
 void uart_putc(char c)
 {
+    if (uart_mirror && c != '\r') uart_mirror(c);
     if (c == '\n') uart_putc('\r');                /* a terminal expects both */
     while (mmio_read(PL011_FR) & (1 << 5)) { }     /* wait while the TX FIFO is full */
     mmio_write(PL011_DR, (uint32_t)(uint8_t)c);

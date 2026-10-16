@@ -47,6 +47,9 @@ static void put_mac(const uint8_t *m)
     }
 }
 
+static int ensure_net(void);
+int netcmd_is_up(void) { return net_up; }
+int netcmd_up(void) { return ensure_net(); }
 static int ensure_net(void)
 {
     if (net_up) return 0;

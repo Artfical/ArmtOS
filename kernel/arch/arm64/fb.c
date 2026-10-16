@@ -168,3 +168,8 @@ void fb_text(uint32_t x, uint32_t y, const char *s, uint32_t rgb)
 {
     for (; *s; s++, x += 8) fb_char(x, y, *s, rgb);
 }
+
+/* for drawing code that composes whole frames itself (the desktop) */
+volatile uint32_t *fb_pixels(void) { return fb; }
+uint32_t fb_pitch(void) { return fb_pitch_px; }
+int fb_swapped(void) { return swap_rb; }

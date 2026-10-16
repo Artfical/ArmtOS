@@ -281,63 +281,74 @@ int usb_bulk(usb_device_t *dev, uint8_t ep, void *data, int len)
  * looks at it each time it is asked: a finished transfer is returned, a NAKed one is simply
  * started again, and a transfer still in flight costs nothing.
  */
-static uint8_t *rx_dma;
-static int rx_armed;
-static usb_device_t *rx_dev;
-static uint8_t rx_ep;
+/* One armed IN transfer per pipe, each on its own channel: 1 for the network adapter's bulk
+ * endpoint, 2 and 3 for HID interrupt endpoints (mouse, keyboard). */
+#define HFNUM        (USB_BASE + 0x408)
+#define HCCHAR_ODDFRM (1u << 29)
 
-int usb_bulk_in_poll(usb_device_t *dev, uint8_t ep, void *data, int max)
+int usb_pipe_poll(usb_pipe_t *p, void *data, int max)
 {
-    if (!rx_dma) rx_dma = dma_alloc(XFER_MAX);
-    if (!rx_dma) return -1;
-    int maxp = dev->speed == 0 ? 512 : 64;
-    uint8_t *t = &toggle[dev->address & 15][ep & 15][1];
+    if (!p->buf) p->buf = dma_alloc(XFER_MAX);
+    if (!p->buf || !p->dev) return -1;
+    usb_device_t *dev = p->dev;
+    int maxp = p->maxp ? p->maxp : (dev->speed == 0 ? 512 : 64);
+    int len = p->eptype == EP_INTERRUPT ? maxp : XFER_MAX;
+    uint8_t *t = &toggle[dev->address & 15][p->ep & 15][1];
+    int ch = p->ch;
 
-    if (rx_armed && (rx_dev != dev || rx_ep != ep)) rx_armed = 0;
-
-    if (rx_armed) {
-        uint32_t s = mmio_read(HCINT(1));
+    if (p->armed) {
+        uint32_t s = mmio_read(HCINT(ch));
         if (s & HCINT_XFERCOMP) {
-            uint32_t left = mmio_read(HCTSIZ(1)) & 0x7FFFF;
-            mmio_write(HCINT(1), 0xFFFFFFFF);
-            rx_armed = 0;
-            int got = XFER_MAX - (int)left;
+            uint32_t left = mmio_read(HCTSIZ(ch)) & 0x7FFFF;
+            mmio_write(HCINT(ch), 0xFFFFFFFF);
+            p->armed = 0;
+            int got = len - (int)left;
             if (got < 0) got = 0;
             int packets = (got + maxp - 1) / maxp;
             if (packets == 0) packets = 1;
             *t ^= (uint8_t)(packets & 1);
             if (got > max) got = max;
-            memcpy(data, rx_dma, (size_t)got);
+            memcpy(data, p->buf, (size_t)got);
             return got;
         }
         if (s & (HCINT_STALL | HCINT_XACTERR)) {
-            mmio_write(HCINT(1), 0xFFFFFFFF);
-            rx_armed = 0;
+            mmio_write(HCINT(ch), 0xFFFFFFFF);
+            p->armed = 0;
             return -1;
         }
-        if (s & HCINT_CHHLTD) {                 /* NAK: the device had nothing; ask again next time */
-            mmio_write(HCINT(1), 0xFFFFFFFF);
-            rx_armed = 0;
+        if (s & HCINT_CHHLTD) {                 /* NAK: nothing yet; ask again next time */
+            mmio_write(HCINT(ch), 0xFFFFFFFF);
+            p->armed = 0;
         }
         return 0;
     }
 
-    mmio_write(HCINT(1), 0xFFFFFFFF);
+    mmio_write(HCINT(ch), 0xFFFFFFFF);
     uint32_t chr = ((uint32_t)maxp & 0x7FF)
-                 | ((uint32_t)(ep & 0xF) << 11)
+                 | ((uint32_t)(p->ep & 0xF) << 11)
                  | (1u << 15)                             /* IN */
                  | ((dev->speed == 2) ? (1u << 17) : 0)
-                 | ((uint32_t)EP_BULK << 18)
+                 | ((uint32_t)p->eptype << 18)
                  | (1u << 20)
                  | ((uint32_t)(dev->address & 0x7F) << 22);
-    int packets = XFER_MAX / maxp;
-    mmio_write(HCTSIZ(1), ((uint32_t)(*t ? 2 : 0) << 29) | ((uint32_t)packets << 19) | (uint32_t)XFER_MAX);
-    mmio_write(HCDMA(1), USB_BUS(rx_dma));
-    mmio_write(HCCHAR(1), chr | HCCHAR_ENA);
-    rx_armed = 1;
-    rx_dev = dev;
-    rx_ep = ep;
+    /* a periodic transfer goes out in the frame after this one, so it names that frame's parity */
+    if (p->eptype == EP_INTERRUPT && !(mmio_read(HFNUM) & 1)) chr |= HCCHAR_ODDFRM;
+    int packets = (len + maxp - 1) / maxp;
+    mmio_write(HCTSIZ(ch), ((uint32_t)(*t ? 2 : 0) << 29) | ((uint32_t)packets << 19) | (uint32_t)len);
+    mmio_write(HCDMA(ch), USB_BUS(p->buf));
+    mmio_write(HCCHAR(ch), chr | HCCHAR_ENA);
+    p->armed = 1;
     return 0;
+}
+
+static usb_pipe_t bulk_rx = { 1, 0, 0, EP_BULK, 0, 0, 0 };
+
+int usb_bulk_in_poll(usb_device_t *dev, uint8_t ep, void *data, int max)
+{
+    if (bulk_rx.dev != dev || bulk_rx.ep != (ep & 0xF)) {
+        bulk_rx.dev = dev; bulk_rx.ep = ep & 0xF; bulk_rx.armed = 0;
+    }
+    return usb_pipe_poll(&bulk_rx, data, max);
 }
 
 /* ---- hubs ----
@@ -427,6 +438,18 @@ static void hub_scan(usb_device_t *hub)
         usb_device_t *d = &devices[ndevices];
         if (device_setup(d, speed, p) == 0) ndevices++;
     }
+}
+
+/* Brings the bus up once; everything after the first call reuses what was found, because a
+ * second enumeration would hand out new addresses under drivers already using the old ones. */
+static int usb_ready = -1;
+int usb_ensure(void)
+{
+    if (usb_ready >= 0) return usb_ready;
+    if (dwc2_init() != 0) { usb_ready = -1; return -1; }
+    usb_enumerate();
+    usb_ready = 0;
+    return 0;
 }
 
 int usb_enumerate(void)

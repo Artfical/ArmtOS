@@ -17,4 +17,9 @@ void fb_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t rgb);
 void fb_char(uint32_t x, uint32_t y, char c, uint32_t rgb);
 void fb_text(uint32_t x, uint32_t y, const char *s, uint32_t rgb);
 
+/* the raw framebuffer: pitch in pixels, and whether red and blue are swapped relative to 0xRRGGBB */
+volatile uint32_t *fb_pixels(void);
+uint32_t fb_pitch(void);
+int fb_swapped(void);
+
 #endif

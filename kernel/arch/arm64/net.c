@@ -33,8 +33,7 @@ int eth_init(void)
         genet_publish_mac(mac);
     } else {
         /* Otherwise the Ethernet is a USB device, so the bus has to be walked first. */
-        if (dwc2_init() == 0) {
-            usb_enumerate();
+        if (usb_ensure() == 0) {
             if (lan95xx_driver.start() == 0) {
                 active = &lan95xx_driver;
                 lan95xx_publish_mac(mac);

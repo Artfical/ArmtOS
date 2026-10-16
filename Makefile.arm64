@@ -63,6 +63,7 @@ OBJS := $(ARCH_DIR)/boot.arm.o \
         $(ARCH_DIR)/usbnet.arm.o \
         $(ARCH_DIR)/cfgfile.arm.o \
         $(ARCH_DIR)/raspi.arm.o \
+        $(ARCH_DIR)/usbhid.arm.o \
         $(ARCH_DIR)/main.arm.o
 
 MP_CORE := $(patsubst %.c,%.arm.o,$(filter-out %/persistentcode.c,$(wildcard kernel/micropython/py/*.c)))
@@ -81,7 +82,8 @@ NET_SRCS := $(filter-out $(addprefix kernel/net/,$(NET_EXCLUDE)),$(wildcard kern
 NET_OBJS := $(NET_SRCS:.c=.arm.o)
 OBJS += $(NET_OBJS) \
         $(ARCH_DIR)/netcompat.arm.o $(ARCH_DIR)/csprng_arm.arm.o $(ARCH_DIR)/nic_arm.arm.o \
-        $(ARCH_DIR)/netcmd.arm.o
+        $(ARCH_DIR)/netcmd.arm.o $(ARCH_DIR)/desktop.arm.o \
+        kernel/display/gfx.arm.o kernel/display/png.arm.o kernel/display/ui_assets.arm.o
 
 OBJS += $(MP_CORE) $(MP_PORT)
 
@@ -108,6 +110,12 @@ $(ARCH_DIR)/netcompat.arm.o $(ARCH_DIR)/csprng_arm.arm.o $(ARCH_DIR)/nic_arm.arm
 	$(CC) $(NETFLAGS) -c $< -o $@
 
 # the shell glue includes both this directory's headers and the stack's, so this directory wins
+kernel/display/%.arm.o: kernel/display/%.c
+	$(CC) $(NETFLAGS) -Ikernel/display -c $< -o $@
+
+$(ARCH_DIR)/desktop.arm.o: $(ARCH_DIR)/desktop.c
+	$(CC) $(filter-out -I$(ARCH_DIR) -I$(ARCH_DIR)/compat,$(NETFLAGS)) -I$(ARCH_DIR) -Ikernel/display -c $< -o $@
+
 $(ARCH_DIR)/netcmd.arm.o: $(ARCH_DIR)/netcmd.c
 	$(CC) $(filter-out -I$(ARCH_DIR) -I$(ARCH_DIR)/compat,$(NETFLAGS)) -I$(ARCH_DIR)/compat -I$(ARCH_DIR) -Ikernel/net -c $< -o $@
 

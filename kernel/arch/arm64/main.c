@@ -19,6 +19,10 @@
 
 int net_command(int argc, char **argv);
 int raspi_command(int argc, char **argv);
+int desktop_start(int w, int h);
+int desktop_active(void);
+void desktop_tick(void);
+int desktop_getc(void);
 
 /* What the firmware hands over, printed so a serial console shows the port is alive and
  * the board was identified before anything harder is attempted. */
@@ -81,7 +85,8 @@ int shell_readline(char *buf, int max)
     int n = 0;
     for (;;) {
         int c = uart_getc_nonblock();
-        if (c < 0) { __asm__ volatile("wfe"); continue; }
+        if (c < 0 && desktop_active()) { desktop_tick(); c = desktop_getc(); }
+        if (c < 0) { if (!desktop_active()) __asm__ volatile("wfe"); continue; }
         if (c == '\r' || c == '\n') { uart_puts("\n"); buf[n] = 0; return n; }
         if ((c == 8 || c == 127) && n > 0) { n--; uart_puts("\b \b"); continue; }
         if (c >= 32 && c < 127 && n < max - 1) { buf[n++] = (char)c; uart_putc((char)c); }
@@ -158,6 +163,7 @@ void shell(void)
             uart_puts("ls              list the programs on the card\n");
             uart_puts("run NAME.t      run a program from the card\n");
             uart_puts("eth             bring the Ethernet up and show its address\n");
+            uart_puts("desktop         start the graphical desktop (USB mouse and keyboard)\n");
             uart_puts("raspi-config    the Raspberry Pi configuration tool (config.txt); try: raspi-config nonint do_i2c 0\n");
             uart_puts("net             start the network stack (DHCP) and show its state\n");
             uart_puts("ping H          ICMP echo to a host name or address\n");
@@ -344,6 +350,10 @@ void shell(void)
             for (;;) __asm__ volatile("wfe");
         } else if (net_command(argc, argv)) {
             /* handled by netcmd.c */
+        } else if (str_eq(argv[0], "desktop") || str_eq(argv[0], "gui")) {
+            extern int desktop_trace;
+            if (argc >= 2 && str_eq(argv[1], "trace")) desktop_trace = 1;
+            desktop_start(0, 0);
         } else if (raspi_command(argc, argv)) {
             /* handled by raspi.c */
         } else {

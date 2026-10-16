@@ -24,7 +24,8 @@ typedef struct {
 } usb_device_t;
 
 int  dwc2_init(void);                      /* 0 = the controller came up */
-int  usb_enumerate(void);                  /* finds what is plugged in; returns the count */
+int  usb_enumerate(void);
+int  usb_ensure(void);                     /* controller up and bus walked, once; 0 = ok */                  /* finds what is plugged in; returns the count */
 int  usb_device_count(void);
 const usb_device_t *usb_device_get(int i);
 
@@ -33,6 +34,19 @@ int  usb_control(usb_device_t *dev, uint8_t rtype, uint8_t req, uint16_t value,
                  uint16_t index, void *data, uint16_t len);
 /* One bulk transfer; `ep` carries the direction bit as the descriptor reports it. */
 int  usb_bulk(usb_device_t *dev, uint8_t ep, void *data, int len);
+
+/* An IN endpoint polled without blocking, on a channel of its own. eptype: 2 bulk, 3 interrupt;
+ * maxp 0 = the usual size for the device's speed. */
+typedef struct {
+    int ch;
+    usb_device_t *dev;
+    uint8_t ep;
+    int eptype;
+    int maxp;
+    uint8_t *buf;
+    int armed;
+} usb_pipe_t;
+int  usb_pipe_poll(usb_pipe_t *p, void *data, int max);     /* 0 nothing yet, >0 bytes, -1 error */
 
 /* A receive that never blocks: 0 when nothing has arrived, the byte count when something has,
  * -1 on an error. One transfer stays armed between calls. */

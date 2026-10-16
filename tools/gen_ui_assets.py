@@ -224,6 +224,7 @@ APPS = [  # name, glyph, top colour, bottom colour
     ('doom',       'skull',           (120, 40, 40),  (40, 10, 10)),
     ('settings',   'settings',        (150, 156, 168),(80, 86, 100)),
     ('launcher',   'layout-grid',     (255, 150, 90), (180, 80, 230)),
+    ('gpio',       'cpu',             (120, 224, 130),(20, 140, 70)),
     ('trash',      'trash-2',         (200, 205, 215),(130, 136, 150)),
 ]
 for name, glyph, c1, c2 in APPS:
