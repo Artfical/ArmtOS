@@ -32,52 +32,15 @@ void doom_window_run(void);
 #include "sound.h"
 #include "png.h"
 #include "memory.h"
+#include "wm_internal.h"
 
 #define WM_SCREEN_W 80
 #define WM_SCREEN_H 25
 #define MENU_ROW 0
 #define DOCK_ROW (WM_SCREEN_H - 1)
 
-#define MAX_WINDOWS 6
-#define NORMAL_W 60
-#define NORMAL_H 16
-
-#define WIN_KIND_TERMINAL 0
-#define WIN_KIND_NOTEPAD 1
-#define WIN_KIND_CLOCK 2
-#define WIN_KIND_ABOUT 3
-#define WIN_KIND_DISKMGR 4
-#define WIN_KIND_CALCULATOR 5
-#define WIN_KIND_FILEMGR 6
-#define WIN_KIND_PAINT 7
-#define WIN_KIND_VIEWER 8
-#define WIN_KIND_TASKMGR 9
-#define WIN_KIND_SCRIPT      10
-#define WIN_KIND_MEDIAPLAYER 11
-#define WIN_KIND_NETMON      12
-#define WIN_KIND_SNAKE       13
-#define WIN_KIND_2048        14
-#define WIN_KIND_PDFVIEWER   15
-#define WIN_KIND_STICKYNOTES 16
-#define WIN_KIND_DOOM        17
-
 static uint16_t *const VGA_MEM = (uint16_t *)0xB8000;
 static uint16_t backbuffer[WM_SCREEN_W * WM_SCREEN_H];
-
-typedef struct {
-    term_surface_t surface;
-    int open;
-    int minimized;
-    int maximized;
-    int pid;
-    int z;
-    int kind;
-    char title[40];
-    char initial_cmd[64];
-    int x0, y0, w0, h0;
-    int rest_x0, rest_y0, rest_w0, rest_h0;
-    int tb_x0, tb_x1;
-} window_t;
 
 static window_t *drag_window;
 static int drag_offset_x, drag_offset_y;
@@ -87,23 +50,24 @@ static int drag_offset_x, drag_offset_y;
 static window_t *resize_window;
 static int resize_start_w, resize_start_h, resize_start_mx, resize_start_my;
 
-static window_t windows[MAX_WINDOWS];
-static window_t *wm_focused = NULL;
+window_t windows[MAX_WINDOWS];
+window_t *wm_focused = NULL;
+int wm_gfx_mode;
 static window_t *pending_window;
-static int next_z = 1;
+int next_z = 1;
 
 /* One-shot mouse click within a window's content area (below the titlebar),
  * in surface-local coordinates, claimable by that window's own task via
  * wm_get_content_click(). Cleared on read or overwritten by the next click. */
-static window_t *content_click_target = NULL;
-static int content_click_x, content_click_y;
+window_t *content_click_target = NULL;
+int content_click_x, content_click_y;
 
 /* One-shot scroll-wheel delta for whichever window is under the mouse
  * cursor, claimable by that window's own task via wm_get_content_wheel().
  * Terminal windows are scrolled directly here instead, since their
  * scrollback view_offset already lives in wm.c. */
-static window_t *wheel_target = NULL;
-static int pending_wheel_delta;
+window_t *wheel_target = NULL;
+int pending_wheel_delta;
 
 /* Highest valid view_offset for a terminal window: scrollback_count
  * plus however many extra rows the surface (TERM_SURFACE_H) has over
@@ -111,6 +75,7 @@ static int pending_wheel_delta;
  * inside w->surface.cells, not yet pushed into scrollback, but are
  * just as much "history" once the window is shorter than the full
  * surface. */
+int wm_term_max_view_offset(window_t *w);
 static int term_max_view_offset(window_t *w)
 {
     int content_h = w->h0 - 1;
@@ -119,10 +84,12 @@ static int term_max_view_offset(window_t *w)
     return w->surface.scrollback_count + extra;
 }
 
+int wm_term_max_view_offset(window_t *w) { return term_max_view_offset(w); }
+
 /* One-shot menu action requested for a window via the top File/Edit/... bar,
  * claimable by that window's own task via wm_get_menu_action(). */
-static window_t *action_target = NULL;
-static int pending_action = WM_ACTION_NONE;
+window_t *action_target = NULL;
+int pending_action = WM_ACTION_NONE;
 
 /* Top menu bar: T (apple-logo stand-in) + File/Edit/View/Label/Special */
 enum { MENU_NONE = 0, MENU_T, MENU_FILE, MENU_EDIT, MENU_VIEW, MENU_LABEL, MENU_SPECIAL };
@@ -306,6 +273,11 @@ int wm_get_content_mouse(int *x, int *y, int *buttons)
     int mx, my;
     uint8_t btns;
     mouse_get_state(&mx, &my, &btns);
+    if (wm_gfx_mode) {
+        wm_gfx_content_mouse(self, x, y);
+        if (buttons) *buttons = btns;
+        return 1;
+    }
     if (x) *x = mx - self->x0;
     if (y) *y = my - self->y0 - 1;
     if (buttons) *buttons = btns;
@@ -339,6 +311,7 @@ static void window_geom_init(window_t *w)
     } else {
         w->x0 = w->rest_x0; w->y0 = w->rest_y0; w->w0 = w->rest_w0; w->h0 = w->rest_h0;
     }
+    if (wm_gfx_mode) wm_gfx_window_opened(w);
     sound_open();
 }
 
@@ -359,7 +332,7 @@ static int fmt_uint02(char *buf, unsigned int v)
     return 2;
 }
 
-static int wm_find_free_slot(void)
+int wm_find_free_slot(void)
 {
     for (int i = 0; i < MAX_WINDOWS; i++)
         if (!windows[i].open) return i;
@@ -406,14 +379,14 @@ static void window_task_entry(void)
         shell_run_windowed(w->initial_cmd);
 }
 
-static void wm_focus_window(window_t *w)
+void wm_focus_window(window_t *w)
 {
     w->minimized = 0;
     w->z = next_z++;
     wm_focused = w;
 }
 
-static void wm_close_window(window_t *w)
+void wm_close_window(window_t *w)
 {
     /* DOOM's window runs in real VBE/Bochs pixel graphics (see
      * doomgeneric_tos.c's DG_Init()/DG_DrawFrame()) instead of the
@@ -423,7 +396,11 @@ static void wm_close_window(window_t *w)
      * hardware would be left stuck in graphics mode showing DOOM's
      * last frame forever after the window "closes". This mirrors what
      * cmd_vgatest already does to leave graphics mode. */
-    if (w->kind == WIN_KIND_DOOM) {
+    if (w->kind == WIN_KIND_DOOM && wm_gfx_mode) {
+        terminal_set_force_direct(0);
+        bochs_set_graphics_active(0);
+        wm_gfx_restore_mode();
+    } else if (w->kind == WIN_KIND_DOOM) {
         bochs_disable();
         vga_set_mode(VGA_MODE_TEXT);
         terminal_set_force_direct(0);
@@ -435,7 +412,7 @@ static void wm_close_window(window_t *w)
      * could be the same task running, say, the GUI terminal underneath
      * it. task_kill()-ing it here would kill that script's own task out
      * from under it, not just close the window. */
-    if (w->kind != WIN_KIND_SCRIPT) task_kill((uint32_t)w->pid);
+    if (w->kind != WIN_KIND_SCRIPT && w->kind != WIN_KIND_PANEL) task_kill((uint32_t)w->pid);
     w->open = 0;
     w->minimized = 0;
     w->maximized = 0;
@@ -504,7 +481,10 @@ int wm_kill_task_window(uint32_t pid)
     return -1;
 }
 
-static void wm_open_window(const char *cmd)
+void wm_open_terminal(const char *cmd);
+static void wm_open_window(const char *cmd) { wm_open_terminal(cmd); }
+
+void wm_open_terminal(const char *cmd)
 {
     int slot = wm_find_free_slot();
     if (slot < 0) return;
@@ -1493,7 +1473,7 @@ static void unique_name(const char *base, const char *suffix, char *out, int out
     }
 }
 
-static void desktop_new_folder(void)
+void wm_desktop_new_folder(void)
 {
     char name[48];
     unique_name("New Folder", "", name, sizeof(name));
@@ -1501,7 +1481,7 @@ static void desktop_new_folder(void)
     wm_open_filemgr();
 }
 
-static void desktop_new_file(void)
+void wm_desktop_new_file(void)
 {
     char name[48];
     unique_name("New File", ".txt", name, sizeof(name));
@@ -1559,8 +1539,8 @@ static int handle_context_click(int cx, int cy)
         cy >= ctx_item_y0[0] && cy < ctx_item_y0[0] + CTX_NUM_ITEMS) {
         int idx = cy - ctx_item_y0[0];
         switch (idx) {
-            case 0: desktop_new_folder(); break;
-            case 1: desktop_new_file(); break;
+            case 0: wm_desktop_new_folder(); break;
+            case 1: wm_desktop_new_file(); break;
             case 2: wm_open_filemgr(); break;
             case 3: wm_open_window(""); break;
             case 4: wm_open_about(); break;
@@ -1582,6 +1562,10 @@ static void wm_desktop_tick(void)
      * screen on the very next tick, making it look like `crash` does
      * nothing. */
     if (crash_screen_is_active()) return;
+
+    /* The graphical desktop has its own frame loop (wm_gfx.c); it deals with other programs
+     * taking over the display itself, so it goes before the check below. */
+    if (wm_gfx_mode) { wm_gfx_tick(); task_yield(); return; }
 
     /* Same reasoning as the crash-screen check above: some other task
      * has switched the display into real VBE pixel graphics (DOOM,
@@ -1849,6 +1833,8 @@ void wm_poll(void)
 void wm_init(void)
 {
     mouse_init();
+    /* a pixel desktop whenever there is a framebuffer to draw it on; the text desktop otherwise */
+    wm_gfx_mode = (wm_gfx_init() == 0);
     for (int i = 0; i < MAX_WINDOWS; i++) windows[i].open = 0;
     wm_focused = NULL;
     active_menu = MENU_NONE;
