@@ -630,7 +630,7 @@ static void draw_topbar(void)
     rx -= 28;
     gfx_blit(&bs, gfx_image("glyph_volume-2"), rx, 6, 230);
     rx -= 28;
-    gfx_blit(&bs, gfx_image("glyph_wifi"), rx, 6, net_ip ? 230 : 90);
+    gfx_blit(&bs, gfx_image("glyph_ethernet-port"), rx, 6, net_ip ? 230 : 90);   /* wired: tOS has no Wi-Fi */
 }
 
 /* dock layout: index 0 is the launcher, then the dock apps, then the trash */

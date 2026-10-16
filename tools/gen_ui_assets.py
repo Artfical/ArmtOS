@@ -231,7 +231,7 @@ for name, glyph, c1, c2 in APPS:
     add_image('icon20_' + name, app_icon(20, glyph, c1, c2))
 
 # small monochrome glyphs for the top bar and window buttons (white on transparent)
-for g in ['wifi', 'volume-2', 'battery-full', 'search', 'power', 'bell', 'x', 'minus', 'maximize-2', 'house', 'monitor', 'cpu', 'chevron-right']:
+for g in ['ethernet-port', 'wifi', 'volume-2', 'battery-full', 'search', 'power', 'bell', 'x', 'minus', 'maximize-2', 'house', 'monitor', 'cpu', 'chevron-right']:
     S = 64
     f = ImageFont.truetype(lucide_path, 52)
     im = Image.new('L', (S, S), 0)
