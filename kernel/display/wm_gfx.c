@@ -823,14 +823,14 @@ static void draw_launcher(void)
     gfx_fill_alpha(&bs, 0, 0, SW, SH, 0x000000, 90);
     int ox, oy;
     launcher_origin(&ox, &oy);
-    gfx_text_center(&bs, &ui_font_title, 0, oy - 70, SW, "Applications", C_TEXT, 255);
+    gfx_text_center(&bs, &ui_font_title, 0, oy - 70, SW, "Applications", 0xF2F3F5, 255);
     for (int i = 0; i < NAPPS; i++) {
         int cx = ox + (i % L_COLS) * L_CELL_W, cy = oy + (i / L_COLS) * L_CELL_H;
         if (i == hover_launch) gfx_rrect(&bs, cx + 10, cy, L_CELL_W - 20, L_CELL_H - 10, 14, 0xFFFFFF, 40);
         gfx_blit_scaled(&bs, icon(apps[i].icon, 1), cx + (L_CELL_W - 64) / 2, cy + 10, 64, 64, 255);
-        gfx_text_center(&bs, &ui_font_regular, cx, cy + 80, L_CELL_W, apps[i].title, C_TEXT, 255);
+        gfx_text_center(&bs, &ui_font_regular, cx, cy + 80, L_CELL_W, apps[i].title, 0xF2F3F5, 255);
     }
-    gfx_text_center(&bs, &ui_font_small, 0, SH - 40, SW, "Click an app to open it, anywhere else to close", C_TEXT_DIM, 255);
+    gfx_text_center(&bs, &ui_font_small, 0, SH - 40, SW, "Click an app to open it, anywhere else to close", 0xC8CAD2, 255);
 }
 
 /* ------------------------------------------------------------------ panels */

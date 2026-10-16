@@ -6,36 +6,36 @@ tOS is a from-scratch x86 hobby operating system with a Linux-like command envir
 
 ## Screenshots
 
-The graphical desktop, as it comes up in QEMU on first boot (<code>-vga std</code>, 1280x720):
+The graphical desktop in QEMU (<code>-vga std</code>, 1280x720):
 
 <table>
 <tr>
 <td><img src="docs/screenshots/desktop.png" width="420"><br>Desktop: frosted top bar and dock, 1280x720 by default</td>
-<td><img src="docs/screenshots/windows.png" width="420"><br>Windows with shadows and rounded corners</td>
-</tr>
-<tr>
 <td><img src="docs/screenshots/launcher.png" width="420"><br>Applications launcher</td>
-<td><img src="docs/screenshots/terminal.png" width="420"><br>Terminal</td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/settings.png" width="420"><br>Settings: resolution, wallpaper, dock, pointer speed</td>
-<td><img src="docs/screenshots/about.png" width="420"><br>About tOS</td>
+<td><img src="docs/screenshots/finder.png" width="420"><br>Files, made like the Finder (light appearance)</td>
+<td><img src="docs/screenshots/settings.png" width="420"><br>System Settings (dark appearance)</td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/system_menu.png" width="420"><br>System menu</td>
-<td><img src="docs/screenshots/context_menu.png" width="420"><br>Desktop right-click menu</td>
+<td><img src="docs/screenshots/settings_light.png" width="420"><br>System Settings, Appearance: light or dark</td>
+<td><img src="docs/screenshots/password.png" width="420"><br>The password dialog for sudo, with the asking app on the padlock</td>
 </tr>
 <tr>
 <td><img src="docs/screenshots/notepad.png" width="420"><br>Notepad</td>
 <td><img src="docs/screenshots/calculator.png" width="420"><br>Calculator</td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/taskmanager.png" width="420"><br>Activity (task manager)</td>
+<td><img src="docs/screenshots/clock.png" width="420"><br>Clock with stopwatch</td>
+<td><img src="docs/screenshots/network.png" width="420"><br>Network: addresses and live download/upload speed</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/taskmanager.png" width="420"><br>Activity</td>
 <td><img src="docs/screenshots/paint.png" width="420"><br>Paint</td>
 </tr>
 <tr>
 <td><img src="docs/screenshots/2048.png" width="420"><br>2048</td>
-<td><img src="docs/screenshots/snake.png" width="420"><br>Snake</td>
+<td><img src="docs/screenshots/terminal.png" width="420"><br>Terminal</td>
 </tr>
 <tr>
 <td><img src="docs/screenshots/doom.png" width="420"><br>DOOM (shareware, <code>doom</code> command)</td>
