@@ -13,6 +13,8 @@
 #include "fsbridge.h"
 #include "debugmon.h"
 #include "io.h"
+#include "uiapp.h"
+#include "keyboard.h"
 
 /*
  * The graphical desktop.
@@ -114,6 +116,11 @@ static const app_t apps[] = {
 
 static const app_t *app_for_window(const window_t *w)
 {
+    if (w->kind == WIN_KIND_NATIVE) {
+        const uiapp_t *ap = w->native;
+        for (int i = 0; i < NAPPS; i++) if (ap && !strcmp(apps[i].id, ap->cls->id)) return &apps[i];
+        return 0;
+    }
     for (int i = 0; i < NAPPS; i++) {
         if (apps[i].kind != w->kind) continue;
         if (w->kind == WIN_KIND_PANEL && apps[i].panel != w->panel) continue;
@@ -153,10 +160,58 @@ static void open_panel(int panel, const char *title)
     sound_open();
 }
 
+/* ---- native apps (uiapp.h) ---- */
+
+static window_t *native_grab;          /* the native window a press started in, until release */
+
+int wm_gfx_open_native(const char *id, const char *arg)
+{
+    if (!wm_gfx_mode) return -1;
+    const uiapp_class_t *cls = uiapp_find(id);
+    if (!cls) return -1;
+    int slot = wm_find_free_slot();
+    if (slot < 0) return -1;
+    uiapp_t *ap = malloc(sizeof(uiapp_t));
+    void *st = malloc((size_t)cls->state_size + 1);
+    if (!ap || !st) { if (ap) free(ap); if (st) free(st); return -1; }
+    memset(ap, 0, sizeof(*ap));
+    memset(st, 0, (size_t)cls->state_size + 1);
+    ap->cls = cls; ap->st = st; ap->w = cls->w; ap->h = cls->h; ap->dirty = 1;
+    strncpy(ap->title, cls->title, sizeof(ap->title) - 1);
+    window_t *w = &windows[slot];
+    terminal_surface_init(&w->surface);
+    w->open = 1; w->minimized = 0; w->maximized = 0;
+    w->kind = WIN_KIND_NATIVE;
+    w->native = ap;
+    w->pid = -1;
+    w->panel = 0;
+    w->initial_cmd[0] = 0;
+    strncpy(w->title, cls->title, sizeof(w->title) - 1);
+    w->title[sizeof(w->title) - 1] = 0;
+    wm_gfx_window_opened(w);
+    if (cls->init) cls->init(ap, arg);
+    wm_focus_window(w);
+    sound_open();
+    dirty = 1;
+    return 0;
+}
+
+void wm_gfx_native_closed(window_t *w)
+{
+    uiapp_t *ap = w->native;
+    if (native_grab == w) native_grab = 0;
+    if (!ap) return;
+    if (ap->cls->close) ap->cls->close(ap);
+    free(ap->st);
+    free(ap);
+    w->native = 0;
+}
+
 static void launch(const app_t *a)
 {
     sound_click();
     if (a->kind == WIN_KIND_PANEL) open_panel(a->panel, a->title);
+    else if (wm_gfx_open_native(a->id, 0) == 0) { }
     else wm_open_app(a->id);
     dirty = 1;
 }
@@ -209,6 +264,11 @@ void wm_gfx_window_opened(window_t *w)
 {
     if (w->kind == WIN_KIND_PANEL) {
         panel_size(w->panel, &w->gw, &w->gh);
+        w->w0 = 1; w->h0 = 1;
+    } else if (w->kind == WIN_KIND_NATIVE) {
+        uiapp_t *ap = w->native;
+        w->gw = ap->w;
+        w->gh = TITLE_H + ap->h;
         w->w0 = 1; w->h0 = 1;
     } else {
         int big = w->kind == WIN_KIND_TERMINAL || w->kind == WIN_KIND_NOTEPAD || w->kind == WIN_KIND_FILEMGR ||
@@ -527,7 +587,13 @@ static void draw_window_g(window_t *w)
     /* content */
     gfx_clip(&bs, x, y + TITLE_H, ww, hh - TITLE_H);
     if (w->kind == WIN_KIND_PANEL) draw_panel(w, x, y + TITLE_H, ww, hh - TITLE_H);
-    else {
+    else if (w->kind == WIN_KIND_NATIVE && w->native) {
+        uiapp_t *ap = w->native;
+        ap->w = ww; ap->h = hh - TITLE_H;
+        gfx_fill(&bs, x, y + TITLE_H, ww, hh - TITLE_H, UI_BG);
+        ap->cls->draw(ap, &bs, x, y + TITLE_H, ww, hh - TITLE_H);
+        if (strcmp(w->title, ap->title)) { strncpy(w->title, ap->title, sizeof(w->title) - 1); }
+    } else {
         /* the grid's background colour, taken from its first cell, fills the padding too */
         uint8_t attr = (uint8_t)(w->surface.cells[0] >> 8);
         gfx_fill(&bs, x, y + TITLE_H, ww, hh - TITLE_H, pal[(attr >> 4) & 15]);
@@ -1131,6 +1197,13 @@ static void press(int x, int y)
         drag_win = w; drag_dx = lx; drag_dy = ly;
         return;
     }
+    if (w->kind == WIN_KIND_NATIVE && w->native) {
+        uiapp_t *ap = w->native;
+        if (ap->cls->resizable && lx >= w->gw - 16 && ly >= w->gh - 16) { resize_win = w; return; }
+        native_grab = w;
+        if (ap->cls->press) ap->cls->press(ap, lx, ly - TITLE_H, 1);
+        return;
+    }
     if (w->kind != WIN_KIND_PANEL && !w->maximized && lx >= w->gw - 16 && ly >= w->gh - 16) {
         resize_win = w;
         return;
@@ -1198,7 +1271,14 @@ void wm_gfx_tick(void)
             if (moved) dirty = 1;
         } else drag_win = 0;
     } else if (resize_win) {
-        if (btn & 1) {
+        if ((btn & 1) && resize_win->kind == WIN_KIND_NATIVE) {
+            uiapp_t *ap = resize_win->native;
+            int nw = mx - resize_win->gx, nh = my - resize_win->gy;
+            int minw = ap->cls->w * 2 / 3, minh = TITLE_H + ap->cls->h * 2 / 3;
+            if (nw < minw) nw = minw;
+            if (nh < minh) nh = minh;
+            if (nw != resize_win->gw || nh != resize_win->gh) { resize_win->gw = nw; resize_win->gh = nh; dirty = 1; }
+        } else if (btn & 1) {
             int cols = (mx - resize_win->gx - 2 * CPAD_X + CW / 2) / CW;
             int rows = (my - resize_win->gy - TITLE_H - 2 * CPAD_Y + CH / 2) / CH;
             int oc = resize_win->w0, orow = resize_win->h0;
@@ -1221,7 +1301,36 @@ void wm_gfx_tick(void)
             int vo = u->surface.view_offset + wheel * 2;
             u->surface.view_offset = vo < 0 ? 0 : vo > maxo ? maxo : vo;
             dirty = 1;
+        } else if (u && u->kind == WIN_KIND_NATIVE && u->native) {
+            uiapp_t *ap = u->native;
+            if (ap->cls->wheel) ap->cls->wheel(ap, wheel);
         } else if (u) { wheel_target = u; pending_wheel_delta = wheel; }
+    }
+
+    /* a press inside a native app: it sees the drag and the release */
+    if (native_grab) {
+        uiapp_t *ap = native_grab->native;
+        int lx = mx - native_grab->gx, ly = my - native_grab->gy - TITLE_H;
+        if (!ap || !native_grab->open) native_grab = 0;
+        else if (btn & 1) { if (moved && ap->cls->drag) ap->cls->drag(ap, lx, ly); }
+        else { if (ap->cls->release) ap->cls->release(ap, lx, ly); native_grab = 0; }
+    }
+
+    /* the keyboard belongs to a focused native app: no task has the focus then */
+    if (wm_focused && wm_focused->open && wm_focused->kind == WIN_KIND_NATIVE && wm_focused->native) {
+        uiapp_t *ap = wm_focused->native;
+        char ch;
+        while (keyboard_try_getchar(&ch)) if (ap->cls->key) ap->cls->key(ap, (unsigned char)ch);
+        int sp;
+        static const int map[5] = { 0, UI_KEY_LEFT, UI_KEY_RIGHT, UI_KEY_UP, UI_KEY_DOWN };
+        while ((sp = keyboard_get_special()) != 0) if (sp >= 1 && sp <= 4 && ap->cls->key) ap->cls->key(ap, map[sp]);
+    }
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        window_t *w = &windows[i];
+        if (!w->open || w->kind != WIN_KIND_NATIVE || !w->native) continue;
+        uiapp_t *ap = w->native;
+        if (!w->minimized && ap->cls->tick && ap->cls->tick(ap)) dirty = 1;
+        if (ap->dirty) { ap->dirty = 0; if (!w->minimized) dirty = 1; }
     }
 
     /* hover states that change the picture */
@@ -1241,7 +1350,7 @@ void wm_gfx_tick(void)
     /* window contents that changed since they were last drawn */
     for (int i = 0; i < MAX_WINDOWS; i++) {
         window_t *w = &windows[i];
-        if (!w->open || w->minimized || w->kind == WIN_KIND_PANEL) continue;
+        if (!w->open || w->minimized || w->kind == WIN_KIND_PANEL || w->kind == WIN_KIND_NATIVE) continue;
         uint32_t s = surface_sum(w);
         if (s != w->g_sum) { w->g_sum = s; dirty = 1; }
     }

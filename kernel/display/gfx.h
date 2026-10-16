@@ -53,6 +53,12 @@ int  gfx_text(gfx_surface_t *s, const ui_font_t *f, int x, int y, const char *st
 int  gfx_text_width(const ui_font_t *f, const char *str);
 void gfx_text_center(gfx_surface_t *s, const ui_font_t *f, int x, int y, int w, const char *str, uint32_t c, int alpha);
 
+/* integer trigonometry: sine and cosine of whole degrees, scaled by 4096 */
+int  gfx_sin(int deg);
+int  gfx_cos(int deg);
+/* a thick anti-aliased line with round ends; r4 is the half-width in quarter pixels */
+void gfx_capsule(gfx_surface_t *s, int x0, int y0, int x1, int y1, int r4, uint32_t c, int alpha);
+
 /* one code page 437 terminal cell, 9 x 18 */
 void gfx_cell(gfx_surface_t *s, int x, int y, uint8_t ch, uint32_t fg, uint32_t bg);
 

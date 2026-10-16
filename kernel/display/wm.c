@@ -412,7 +412,8 @@ void wm_close_window(window_t *w)
      * could be the same task running, say, the GUI terminal underneath
      * it. task_kill()-ing it here would kill that script's own task out
      * from under it, not just close the window. */
-    if (w->kind != WIN_KIND_SCRIPT && w->kind != WIN_KIND_PANEL) task_kill((uint32_t)w->pid);
+    if (w->kind == WIN_KIND_NATIVE) wm_gfx_native_closed(w);
+    else if (w->kind != WIN_KIND_SCRIPT && w->kind != WIN_KIND_PANEL) task_kill((uint32_t)w->pid);
     w->open = 0;
     w->minimized = 0;
     w->maximized = 0;
@@ -544,6 +545,7 @@ static void wm_open_notepad(void)
 
 void wm_open_notepad_file(const char *path)
 {
+    if (wm_gfx_mode && wm_gfx_open_native("notepad", path) == 0) return;
     notepad_open_path(path);
     wm_open_notepad();
 }
@@ -715,6 +717,7 @@ static void wm_open_viewer(void)
 
 void wm_open_viewer_file(const char *path)
 {
+    if (wm_gfx_mode && wm_gfx_open_native("viewer", path) == 0) return;
     viewer_open_path(path);
     wm_open_viewer();
 }
@@ -915,6 +918,8 @@ static void wm_open_2048(void)
  * actually opened — e.g. no free slot), -1 for an unknown name. */
 int wm_open_app(const char *name)
 {
+    /* the graphical desktop has native versions of most apps */
+    if (wm_gfx_mode && wm_gfx_open_native(name, 0) == 0) return 0;
     if (strcmp(name, "notepad") == 0) wm_open_notepad();
     else if (strcmp(name, "clock") == 0) wm_open_clock();
     else if (strcmp(name, "about") == 0) wm_open_about();
