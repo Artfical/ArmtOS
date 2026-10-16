@@ -187,6 +187,9 @@ KERNEL_OBJS = \
     kernel/shell/tos_api.o \
     kernel/display/gui.o \
     kernel/display/wm.o \
+    kernel/display/wm_gfx.o \
+    kernel/display/gfx.o \
+    kernel/display/ui_assets.o \
     kernel/display/notepad.o \
     kernel/display/clock.o \
     kernel/display/about.o \

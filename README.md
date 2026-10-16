@@ -6,34 +6,40 @@ tOS is a from-scratch x86 hobby operating system with a Linux-like command envir
 
 ## Screenshots
 
+The graphical desktop, as it comes up in QEMU on first boot (<code>-vga std</code>, 1280x720):
+
 <table>
 <tr>
-<td><img src="docs/screenshots/desktop.png" width="360"><br>Desktop &amp; dock</td>
-<td><img src="docs/screenshots/terminal.png" width="360"><br>Terminal window</td>
+<td><img src="docs/screenshots/desktop.png" width="420"><br>Desktop: frosted top bar and dock, 1280x720 by default</td>
+<td><img src="docs/screenshots/windows.png" width="420"><br>Windows with shadows and rounded corners</td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/special_menu.png" width="360"><br>Special menu (app launcher)</td>
-<td><img src="docs/screenshots/files.png" width="360"><br>Files (file manager)</td>
+<td><img src="docs/screenshots/launcher.png" width="420"><br>Applications launcher</td>
+<td><img src="docs/screenshots/terminal.png" width="420"><br>Terminal</td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/paint.png" width="360"><br>Paint</td>
-<td><img src="docs/screenshots/calculator.png" width="360"><br>Calculator</td>
+<td><img src="docs/screenshots/settings.png" width="420"><br>Settings: resolution, wallpaper, dock, pointer speed</td>
+<td><img src="docs/screenshots/about.png" width="420"><br>About tOS</td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/pdfviewer.png" width="360"><br>PDF Viewer</td>
-<td><img src="docs/screenshots/taskmanager.png" width="360"><br>Task Manager</td>
+<td><img src="docs/screenshots/system_menu.png" width="420"><br>System menu</td>
+<td><img src="docs/screenshots/context_menu.png" width="420"><br>Desktop right-click menu</td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/snake.png" width="360"><br>Snake</td>
-<td><img src="docs/screenshots/2048.png" width="360"><br>2048</td>
+<td><img src="docs/screenshots/notepad.png" width="420"><br>Notepad</td>
+<td><img src="docs/screenshots/calculator.png" width="420"><br>Calculator</td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/notepad.png" width="360"><br>Note Pad (Mac OS 7 style)</td>
-<td><img src="docs/screenshots/crash.png" width="360"><br>Crash screen (<code>crash</code> command)</td>
+<td><img src="docs/screenshots/taskmanager.png" width="420"><br>Activity (task manager)</td>
+<td><img src="docs/screenshots/paint.png" width="420"><br>Paint</td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/doom.png" width="360"><br>DOOM (shareware, <code>doom</code> command)</td>
-<td><img src="docs/screenshots/vgatest.png" width="360"><br>Bochs/VBE linear framebuffer test (<code>vgatest</code> command)</td>
+<td><img src="docs/screenshots/2048.png" width="420"><br>2048</td>
+<td><img src="docs/screenshots/snake.png" width="420"><br>Snake</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/doom.png" width="420"><br>DOOM (shareware, <code>doom</code> command)</td>
+<td><img src="docs/screenshots/crash.png" width="420"><br>Crash screen (<code>crash</code> command)</td>
 </tr>
 </table>
 
@@ -42,7 +48,7 @@ tOS is a from-scratch x86 hobby operating system with a Linux-like command envir
 - **CPU:** i586 compatible (32-bit x86)
 - **Memory:** Minimum 32 MB recommended (3 MB absolute minimum)
 - **Boot:** GRUB (Multiboot1 or Multiboot2, auto-detected) — bootable via ISO or PXE
-- **Display:** VGA text mode (80x25), optional GUI mode with PS/2 mouse
+- **Display:** VGA text mode (80x25); the GUI uses a Bochs/QEMU/VirtualBox VBE framebuffer at 1280x720 (1024x768 to 1920x1080 in Settings), falling back to the text-mode desktop without one. PS/2 mouse
 - **Input:** PS/2 keyboard (mandatory), PS/2 mouse (optional)
 - **Network:** RTL8139, PCnet (AMD Am79C970A/PCnet32), E1000, virtio-net, or NE2000 (RTL8029) NIC
 - **Storage:** No disk required for boot — optional IDE disk for persistent storage via tFS

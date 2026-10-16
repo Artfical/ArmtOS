@@ -57,24 +57,45 @@ static volatile int mouse_wheel_accum = 0;
 static int accum_dx = 0;
 static int accum_dy = 0;
 
+/* The text desktop moves the pointer in character cells (80 x 25); the graphical one in
+ * pixels, with a little acceleration so a 1280-pixel screen does not need a long desk. */
+static int pixel_mode;
+static int max_x = 80, max_y = 25;
+
+void mouse_set_pixel_mode(int width, int height)
+{
+    pixel_mode = 1;
+    max_x = width;
+    max_y = height;
+    mouse_x = width / 2;
+    mouse_y = height / 2;
+    accum_dx = accum_dy = 0;
+}
+
 static void mouse_apply_delta(int dx, int dy)
 {
-    accum_dx += dx;
-    accum_dy += dy;
-
-    int cell_dx = accum_dx / MOUSE_SENS_DIV;
-    int cell_dy = accum_dy / MOUSE_SENS_DIV;
-    accum_dx -= cell_dx * MOUSE_SENS_DIV;
-    accum_dy -= cell_dy * MOUSE_SENS_DIV;
+    int cell_dx, cell_dy;
+    if (pixel_mode) {
+        int ax = dx < 0 ? -dx : dx, ay = dy < 0 ? -dy : dy;
+        cell_dx = ax > 6 ? dx * 2 : dx;
+        cell_dy = ay > 6 ? dy * 2 : dy;
+    } else {
+        accum_dx += dx;
+        accum_dy += dy;
+        cell_dx = accum_dx / MOUSE_SENS_DIV;
+        cell_dy = accum_dy / MOUSE_SENS_DIV;
+        accum_dx -= cell_dx * MOUSE_SENS_DIV;
+        accum_dy -= cell_dy * MOUSE_SENS_DIV;
+    }
 
     int nx = mouse_x + cell_dx;
     if (nx < 0) nx = 0;
-    if (nx >= 80) nx = 79;
+    if (nx >= max_x) nx = max_x - 1;
     mouse_x = nx;
 
     int ny = mouse_y + cell_dy;
     if (ny < 0) ny = 0;
-    if (ny >= 25) ny = 24;
+    if (ny >= max_y) ny = max_y - 1;
     mouse_y = ny;
 }
 
