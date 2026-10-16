@@ -968,6 +968,135 @@ static void draw_panel(window_t *w, int x, int y, int pw, int ph)
     else draw_about(x, y, pw, ph);
 }
 
+/* ------------------------------------------------------------------ the password sheet
+ * Every password prompt a window's task makes while the desktop is up (sudo, su, privileged
+ * file operations) comes here instead of the terminal: a macOS-style dialog over everything,
+ * with the asking app named, the user's name filled in and the password shown as dots. */
+
+static struct {
+    volatile int active, done;
+    int result;
+    char app[48], user[32];
+    char pw[64];
+    int len;
+    int attempt;
+    uint32_t shake_ms, last_req_ms;
+} sheet;
+
+int wm_gfx_password_sheet(const char *prompt, char *out, int max)
+{
+    if (!wm_gfx_mode) return -2;
+    while (sheet.active) task_yield();             /* one at a time */
+    window_t *w = (window_t *)task_get_userdata();
+    memset((void *)&sheet.pw, 0, sizeof(sheet.pw));
+    sheet.len = 0;
+    strcpy(sheet.app, w && w->open ? (w->kind == WIN_KIND_TERMINAL ? "Terminal" : w->title) : "tOS");
+    /* "[sudo] password for alice: " -> alice */
+    sheet.user[0] = 0;
+    const char *f = prompt;
+    for (const char *q = prompt; *q; q++) if (q[0] == 'f' && q[1] == 'o' && q[2] == 'r' && q[3] == ' ') f = q + 4;
+    int o = 0;
+    while (f != prompt && *f && *f != ':' && *f != ' ' && o < 31) sheet.user[o++] = *f++;
+    sheet.user[o] = 0;
+    uint32_t now = debugmon_uptime_ms();
+    /* asked again straight after an answer: that answer was wrong, so shake */
+    if (now - sheet.last_req_ms < 3000) { sheet.attempt++; sheet.shake_ms = now; } else sheet.attempt = 0;
+    sheet.done = 0;
+    sheet.active = 1;
+    dirty = 1;
+    while (!sheet.done) task_yield();
+    int r = sheet.result;
+    if (r >= 0) {
+        int n = sheet.len < max - 1 ? sheet.len : max - 1;
+        memcpy(out, sheet.pw, (size_t)n);
+        out[n] = 0;
+        r = n;
+    }
+    memset((void *)&sheet.pw, 0, sizeof(sheet.pw));
+    sheet.last_req_ms = debugmon_uptime_ms();
+    sheet.active = 0;
+    dirty = 1;
+    return r;
+}
+
+#define SHEET_W 380
+#define SHEET_H 290
+
+static void sheet_rect(int *x, int *y)
+{
+    int shake = 0;
+    uint32_t dt = debugmon_uptime_ms() - sheet.shake_ms;
+    if (sheet.attempt && dt < 400) {
+        static const int off[8] = { -12, 12, -9, 9, -5, 5, -2, 0 };
+        shake = off[(dt / 50) % 8];
+        dirty = 1;
+    }
+    *x = (SW - SHEET_W) / 2 + shake;
+    *y = (SH - SHEET_H) / 2 - 40;
+}
+
+static void draw_sheet(void)
+{
+    if (!sheet.active) return;
+    gfx_fill_alpha(&bs, 0, 0, SW, SH, 0x000000, 90);
+    int x, y;
+    sheet_rect(&x, &y);
+    gfx_shadow(&bs, x, y, SHEET_W, SHEET_H, 255);
+    gfx_rrect(&bs, x, y, SHEET_W, SHEET_H, 14, 0x2C2D35, 250);
+    gfx_rrect_outline(&bs, x, y, SHEET_W, SHEET_H, 14, 0xFFFFFF, 30);
+    /* a padlock: a rounded body and a shackle */
+    int lx = x + SHEET_W / 2;
+    gfx_capsule(&bs, lx - 11, y + 44, lx - 11, y + 32, 7, 0xC9CBD2, 255);
+    gfx_capsule(&bs, lx + 11, y + 44, lx + 11, y + 32, 7, 0xC9CBD2, 255);
+    gfx_capsule(&bs, lx - 11, y + 31, lx + 11, y + 31, 7, 0xC9CBD2, 255);
+    gfx_rrect(&bs, lx - 22, y + 42, 44, 34, 8, 0xE6E7EB, 255);
+    gfx_circle(&bs, lx, y + 57, 4, 0x55565E, 255);
+    char t[96];
+    strcpy(t, sheet.app);
+    strcat(t, " wants to make changes.");
+    gfx_text_center(&bs, &ui_font_medium, x, y + 92, SHEET_W, t, C_TEXT, 255);
+    gfx_text_center(&bs, &ui_font_small, x, y + 116, SHEET_W, "Enter your password to allow this.", C_TEXT_DIM, 255);
+    /* the fields */
+    int fx = x + 30, fw = SHEET_W - 60;
+    gfx_rrect(&bs, fx, y + 146, fw, 30, 7, 0x1F2026, 255);
+    gfx_text(&bs, &ui_font_regular, fx + 12, y + 152, sheet.user[0] ? sheet.user : "User Name", sheet.user[0] ? C_TEXT_DIM : 0x5C5F6A, 255);
+    gfx_rrect(&bs, fx, y + 184, fw, 30, 7, 0x1F2026, 255);
+    gfx_rrect_outline(&bs, fx - 2, y + 182, fw + 4, 34, 9, C_ACCENT, 200);
+    if (sheet.len == 0) gfx_text(&bs, &ui_font_regular, fx + 12, y + 190, "Password", 0x5C5F6A, 255);
+    for (int i = 0; i < sheet.len && i < 30; i++) gfx_circle(&bs, fx + 16 + i * 12, y + 199, 3, C_TEXT, 255);
+    int cx = fx + 12 + sheet.len * 12;
+    if ((debugmon_uptime_ms() / 500) % 2 == 0) gfx_fill(&bs, cx, y + 190, 2, 18, C_ACCENT);
+    dirty = 1;                                       /* the caret blinks */
+    /* the buttons */
+    int bw = (fw - 12) / 2;
+    gfx_rrect(&bs, fx, y + 236, bw, 32, 8, 0x4A4B54, 255);
+    gfx_text_center(&bs, &ui_font_medium, fx, y + 243, bw, "Cancel", C_TEXT, 255);
+    gfx_rrect(&bs, fx + bw + 12, y + 236, bw, 32, 8, C_ACCENT, 255);
+    gfx_text_center(&bs, &ui_font_medium, fx + bw + 12, y + 243, bw, sheet.attempt ? "Try Again" : "OK", 0xFFFFFF, 255);
+}
+
+static void sheet_finish(int ok) { sheet.result = ok ? 0 : -1; sheet.done = 1; dirty = 1; }
+
+static void sheet_input(int pressed_btn)
+{
+    char ch;
+    while (keyboard_try_getchar(&ch)) {
+        if (ch == '\n') { sheet_finish(1); return; }
+        if (ch == 0x1B) { sheet_finish(0); return; }
+        if (ch == '\b') { if (sheet.len) sheet.pw[--sheet.len] = 0; }
+        else if ((unsigned char)ch >= 32 && sheet.len < (int)sizeof(sheet.pw) - 1) sheet.pw[sheet.len++] = ch;
+        dirty = 1;
+    }
+    while (keyboard_get_special()) { }
+    if (pressed_btn) {
+        int x, y;
+        sheet_rect(&x, &y);
+        int fx = x + 30, fw = SHEET_W - 60, bw = (fw - 12) / 2;
+        if (mx >= fx && mx < fx + bw && my >= y + 236 && my < y + 268) sheet_finish(0);
+        else if (mx >= fx + bw + 12 && mx < fx + fw && my >= y + 236 && my < y + 268) sheet_finish(1);
+    }
+}
+
 /* ------------------------------------------------------------------ frames */
 
 static void compose(void)
@@ -985,6 +1114,7 @@ static void compose(void)
     draw_dock();
     draw_topbar();
     draw_menu();
+    draw_sheet();
 }
 
 static void cursor_erase(void)
@@ -1331,6 +1461,12 @@ void wm_gfx_tick(void)
     int released = !(btn & 1) && (prev_btn & 1);
     int rpressed = ((btn & 2) && !(prev_btn & 2)) || (rlatched && !(prev_btn & 2));
     prev_btn = btn;
+
+    if (sheet.active && !sheet.done) {
+        sheet_input(pressed);
+        pressed = 0;
+        rpressed = 0;
+    }
 
     if (drag_win) {
         if (btn & 1) {
