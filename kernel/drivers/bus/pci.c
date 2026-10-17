@@ -47,7 +47,8 @@ int pci_find_devices(uint8_t class_code, uint8_t subclass, pci_device_t *devices
                     }
                 }
 
-                if (func == 0 && !(pci_read_config(bus, dev, 0, 0) & 0x800000))
+                /* bit 7 of the header type (offset 0x0E) says the device has more functions */
+                if (func == 0 && !(pci_read_config(bus, dev, 0, 0x0C) & 0x800000))
                     break;
             }
         }

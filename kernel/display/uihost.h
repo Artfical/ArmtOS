@@ -61,4 +61,21 @@ int  uihost_set_password(const char *name, const char *password);               
 void uihost_authorize(const char *reason);
 int  uihost_authorized(void);
 
+
+/* Notifications: a banner at the top right that stays in Notification Centre. app is the app's
+ * id (its icon is used) or a name such as "System"; icon is an image name ("doc48_disk",
+ * "icon48_paint") or NULL; act1/act2 are button labels or NULL (with buttons the banner waits
+ * for an answer). Returns an id for uihost_notify_result: 0 waiting, 1 or 2 that button,
+ * 3 the notification itself was clicked, -1 closed, -2 unknown. Do Not Disturb ("dnd" in
+ * uihost_get/uihost_set) keeps banners away but the Centre still collects. */
+int  uihost_notify(const char *app, const char *icon, const char *title, const char *body, const char *act1, const char *act2);
+int  uihost_notify_result(int id);
+
+
+/* Removable disks: what is mounted (under /Volumes) and ejecting one (0 = safe to unplug,
+ * -1 = in use). Unplugging a disk without ejecting it is reported by the desktop itself. */
+typedef struct { char name[32]; char path[64]; uint64_t bytes; } uihost_volume_t;
+int  uihost_volumes(uihost_volume_t *out, int max);
+int  uihost_eject(const char *path);
+
 #endif

@@ -14,9 +14,15 @@ void blockdev_init(void)
     dev_count = 0;
 }
 
+static int last_slot;
+
 static blockdev_t *alloc_slot(void)
 {
+    /* a slot left by a device that went away (a USB disk pulled out) is used again */
+    for (int i = 0; i < dev_count; i++)
+        if (!devices[i].used) { memset(&devices[i], 0, sizeof(devices[i])); devices[i].used = 1; last_slot = i; return &devices[i]; }
     if (dev_count >= BLOCKDEV_MAX) return 0;
+    last_slot = dev_count;
     blockdev_t *bd = &devices[dev_count++];
     memset(bd, 0, sizeof(*bd));
     bd->used = 1;
@@ -73,10 +79,20 @@ int blockdev_register_usb(usb_msd_device_t *dev)
     blockdev_t *bd = alloc_slot();
     if (!bd) return -1;
     bd->type = BLOCKDEV_USB_MSD;
-    set_name(bd, "usb", dev_count - 1);
+    set_name(bd, "usb", last_slot);
     bd->sector_size = dev->block_size ? dev->block_size : 512;
     bd->total_sectors = dev->block_count;
     bd->driver_data = dev;
+    return 0;
+}
+
+int blockdev_unregister(blockdev_t *bd)
+{
+    if (!bd || !bd->used) return -1;
+    blockdev_cache_invalidate(bd);
+    bd->used = 0;
+    bd->mounted = 0;
+    bd->driver_data = 0;
     return 0;
 }
 

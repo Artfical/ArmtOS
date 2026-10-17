@@ -25,6 +25,8 @@ void desktop_open(const char *id, const char *arg);
 int  desktop_set_wallpaper_file(const char *path);
 int  desktop_get(const char *key);
 void desktop_set(const char *key, int value);
+int  desktop_notify(const char *app, const char *icon, const char *title, const char *body, const char *act1, const char *act2);
+int  notify_result(int id);
 
 uint32_t uihost_ms(void) { return (uint32_t)(timer_us() / 1000); }
 
@@ -165,3 +167,13 @@ int uihost_add_user(const char *name, const char *password, const char *full, in
 int uihost_set_password(const char *name, const char *password) { (void)name; (void)password; return -1; }
 void uihost_authorize(const char *reason) { (void)reason; }
 int  uihost_authorized(void) { return 1; }
+
+int uihost_notify(const char *app, const char *icon, const char *title, const char *body, const char *act1, const char *act2)
+{
+    return desktop_notify(app, icon, title, body, act1, act2);
+}
+int uihost_notify_result(int id) { return notify_result(id); }
+
+/* the SD card is the only disk and it is not removable while the system runs from it */
+int uihost_volumes(uihost_volume_t *out, int max) { (void)out; (void)max; return 0; }
+int uihost_eject(const char *path) { (void)path; return -1; }

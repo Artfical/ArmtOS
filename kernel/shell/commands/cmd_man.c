@@ -377,6 +377,17 @@ static const man_page_t man_pages[] = {
 "Example:\n"
 "  /> env\n"
 },
+{"notify",
+"notify - show a notification on the desktop\n\n"
+"Usage: notify [-a app] [-i icon] [-b button]... [-w] <title> [body]\n"
+"       notify dnd on|off\n\n"
+"  -a app     the app it comes from (its icon and name are shown)\n"
+"  -i icon    an icon: an app id (paint, files) or an image (doc48_disk)\n"
+"  -b label   a button; give it twice for two\n"
+"  -w         wait for the answer and print it\n\n"
+"Example:\n"
+"  /> notify -b Install -b Later -w \"Update ready\" \"tOS 2.1 can be installed now.\"\n"
+},
 {"uptime",
 "uptime - show how long the system has been running\n\n"
 "Example:\n"

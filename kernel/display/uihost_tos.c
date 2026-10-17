@@ -197,3 +197,20 @@ int uihost_set_password(const char *name, const char *password)
     auth_restore(&saved);
     return r;
 }
+
+/* ---- removable disks ---- */
+#include "volumes.h"
+
+int uihost_volumes(uihost_volume_t *out, int max)
+{
+    volume_info_t v[VOLUMES_MAX];
+    int n = volumes_list(v, max < VOLUMES_MAX ? max : VOLUMES_MAX);
+    for (int i = 0; i < n; i++) {
+        strcpy(out[i].name, v[i].name);
+        strcpy(out[i].path, v[i].path);
+        out[i].bytes = v[i].bytes;
+    }
+    return n;
+}
+
+int uihost_eject(const char *path) { return volumes_eject(path); }

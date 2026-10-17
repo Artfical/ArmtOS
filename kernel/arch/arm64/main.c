@@ -112,7 +112,7 @@ static int parse_int(const char *s)
     return v;
 }
 
-/* splits on single spaces, in place */
+/* splits on spaces, in place; "double" or 'single' quotes keep spaces in one word */
 static int split(char *line, char **argv, int max)
 {
     int n = 0;
@@ -120,6 +120,15 @@ static int split(char *line, char **argv, int max)
     while (*p && n < max) {
         while (*p == ' ') p++;
         if (!*p) break;
+        if (*p == '"' || *p == '\'') {
+            char q = *p++;
+            char *w = p;
+            argv[n++] = p;
+            while (*p && *p != q) *w++ = *p++;
+            if (*p) p++;
+            *w = 0;
+            continue;
+        }
         argv[n++] = p;
         while (*p && *p != ' ') p++;
         if (*p) *p++ = 0;
@@ -149,6 +158,7 @@ void shell(void)
 
         if (str_eq(argv[0], "help")) {
             uart_puts("help            this list\n");
+            uart_puts("notify [-b B] T [BODY]  show a notification on the desktop (notify dnd on/off)\n");
             uart_puts("gpio PIN 0|1    drive a header pin low or high\n");
             uart_puts("read PIN        read a header pin\n");
             uart_puts("mem             how much memory the firmware gave the ARM side\n");
@@ -354,6 +364,21 @@ void shell(void)
             extern int desktop_trace;
             if (argc >= 2 && str_eq(argv[1], "trace")) desktop_trace = 1;
             desktop_start(0, 0);
+        } else if (str_eq(argv[0], "notify")) {
+            /* notify [-a app] [-b button]... <title> [body]  /  notify dnd on|off */
+            extern int uihost_notify(const char *, const char *, const char *, const char *, const char *, const char *);
+            extern void desktop_set(const char *, int);
+            if (argc == 3 && str_eq(argv[1], "dnd")) { desktop_set("dnd", str_eq(argv[2], "on")); continue; }
+            const char *app = "terminal", *title = 0, *body = 0, *act[2] = { 0, 0 };
+            int na = 0;
+            for (int i = 1; i < argc; i++) {
+                if (str_eq(argv[i], "-a") && i + 1 < argc) app = argv[++i];
+                else if (str_eq(argv[i], "-b") && i + 1 < argc) { if (na < 2) act[na++] = argv[++i]; else i++; }
+                else if (!title) title = argv[i];
+                else if (!body) body = argv[i];
+            }
+            if (!title) uart_puts("usage: notify [-a app] [-b button]... <title> [body] | notify dnd on|off\n");
+            else uihost_notify(app, app, title, body, act[0], act[1]);
         } else if (raspi_command(argc, argv)) {
             /* handled by raspi.c */
         } else {

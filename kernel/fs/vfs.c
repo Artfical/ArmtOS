@@ -112,6 +112,23 @@ int vfs_unmount(const char *path)
     return -1;
 }
 
+/* the device under the mount is gone: drop it even with files open (they read as closed) */
+int vfs_unmount_force(const char *path)
+{
+    char abs[VFS_NAME_LEN];
+    abspath_into(path, abs);
+    for (int i = 0; i < mount_count; i++) {
+        if (!mounts[i].used || mounts[i].path_len == 0 || strcmp(mounts[i].path, abs)) continue;
+        for (int f = 0; f < VFS_MAX_FDS; f++)
+            if (fd_table[f].used && fd_table[f].mount_idx == i) fd_table[f].used = 0;
+        mounts[i].used = 0;
+        mounts[i].ops = 0;
+        mounts[i].private_data = 0;
+        return 0;
+    }
+    return -1;
+}
+
 static mount_t *find_mount(const char *path)
 {
     mount_t *best = 0;

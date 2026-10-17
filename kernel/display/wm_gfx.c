@@ -18,6 +18,8 @@
 #include "uihost.h"
 #include "imgload.h"
 #include "auth.h"
+#include "wm_notify.h"
+#include "volumes.h"
 
 /*
  * The graphical desktop.
@@ -71,6 +73,7 @@ static int mx, my;                    /* pointer, pixels */
 static uint8_t prev_btn;
 static int cur_x = -100, cur_y = -100;    /* where the cursor is drawn on screen */
 static int dirty = 1;
+static int clock_x = -1000, clock_w;
 static uint32_t last_frame_ms;
 static int last_minute = -1;
 static int ext_graphics;              /* another program owned the display last frame */
@@ -596,7 +599,7 @@ static void draw_window_g(window_t *w)
         ap->w = ww; ap->h = hh - TITLE_H;
         gfx_fill(&bs, x, y + TITLE_H, ww, hh - TITLE_H, UI_BG);
         ap->cls->draw(ap, &bs, x, y + TITLE_H, ww, hh - TITLE_H);
-        if (strcmp(w->title, ap->title)) { strncpy(w->title, ap->title, sizeof(w->title) - 1); }
+        if (strcmp(w->title, ap->title)) { strncpy(w->title, ap->title, sizeof(w->title) - 1); dirty = 1; }   /* the bar was drawn with the old one */
     } else {
         /* the grid's background colour, taken from its first cell, fills the padding too */
         uint8_t attr = (uint8_t)(w->surface.cells[0] >> 8);
@@ -693,8 +696,14 @@ static void draw_topbar(void)
     clk[o] = 0;
     int cw = gfx_text_width(&ui_font_medium, clk);
     int rx = SW - 14 - cw;
+    if (notify_center_is_open()) gfx_rrect(&bs, rx - 8, 3, cw + 16, TOPBAR_H - 6, 6, ui_theme.dark ? 0xFFFFFF : 0x000000, 30);
     gfx_text(&bs, &ui_font_medium, rx, 6, clk, ui_theme.bar_text, 255);
+    clock_x = rx - 8; clock_w = cw + 16;
     rx -= 30;
+    if (notify_dnd()) {   /* Do Not Disturb is on: a moon beside the clock */
+        gfx_blit_tinted(&bs, gfx_image("glyph_moon"), rx, 6, ui_theme.bar_text, 230);
+        rx -= 28;
+    }
     gfx_blit_tinted(&bs, gfx_image("glyph_search"), rx, 6, ui_theme.bar_text, 230);
     menu_label_x[3] = rx - 6; menu_label_w[3] = 28;
     rx -= 28;
@@ -823,14 +832,14 @@ static void draw_launcher(void)
     gfx_fill_alpha(&bs, 0, 0, SW, SH, 0x000000, 90);
     int ox, oy;
     launcher_origin(&ox, &oy);
-    gfx_text_center(&bs, &ui_font_title, 0, oy - 70, SW, "Applications", C_TEXT, 255);
+    gfx_text_center(&bs, &ui_font_title, 0, oy - 70, SW, "Applications", 0xF2F3F5, 255);
     for (int i = 0; i < NAPPS; i++) {
         int cx = ox + (i % L_COLS) * L_CELL_W, cy = oy + (i / L_COLS) * L_CELL_H;
         if (i == hover_launch) gfx_rrect(&bs, cx + 10, cy, L_CELL_W - 20, L_CELL_H - 10, 14, 0xFFFFFF, 40);
         gfx_blit_scaled(&bs, icon(apps[i].icon, 1), cx + (L_CELL_W - 64) / 2, cy + 10, 64, 64, 255);
-        gfx_text_center(&bs, &ui_font_regular, cx, cy + 80, L_CELL_W, apps[i].title, C_TEXT, 255);
+        gfx_text_center(&bs, &ui_font_regular, cx, cy + 80, L_CELL_W, apps[i].title, 0xF2F3F5, 255);
     }
-    gfx_text_center(&bs, &ui_font_small, 0, SH - 40, SW, "Click an app to open it, anywhere else to close", C_TEXT_DIM, 255);
+    gfx_text_center(&bs, &ui_font_small, 0, SH - 40, SW, "Click an app to open it, anywhere else to close", 0xC8CAD2, 255);
 }
 
 /* ------------------------------------------------------------------ panels */
@@ -1193,10 +1202,75 @@ static void sheet_input(int pressed_btn)
 
 /* ------------------------------------------------------------------ frames */
 
+/* ------------------------------------------------------------------ disks on the desktop */
+
+/* mounted removable disks sit at the top right of the desktop, like on a Mac */
+static uihost_volume_t desk_vols[VOLUMES_MAX];
+static int desk_nvol, desk_sel = -1, desk_last_click = -1;
+static uint32_t desk_click_ms;
+
+static void desk_disk_rect(int i, int *x, int *y) { *x = SW - 112; *y = TOPBAR_H + 18 + i * 104; }
+
+static void draw_desktop_disks(void)
+{
+    desk_nvol = uihost_volumes(desk_vols, VOLUMES_MAX);
+    if (desk_sel >= desk_nvol) desk_sel = -1;
+    for (int i = 0; i < desk_nvol; i++) {
+        int x, y;
+        desk_disk_rect(i, &x, &y);
+        if (i == desk_sel) gfx_rrect(&bs, x + 18, y - 4, 72, 72, 8, 0x000000, 70);
+        gfx_blit(&bs, gfx_image("doc64_disk"), x + 22, y, 255);
+        int tw = gfx_text_width(&ui_font_medium, desk_vols[i].name);
+        if (tw > 104) tw = 104;
+        int tx = x + 54 - tw / 2;
+        if (i == desk_sel) gfx_rrect(&bs, tx - 6, y + 68, tw + 12, 20, 5, UI_ACCENT, 255);
+        else gfx_text(&bs, &ui_font_medium, tx + 1, y + 71, desk_vols[i].name, 0x000000, 140);
+        gfx_text(&bs, &ui_font_medium, tx, y + 70, desk_vols[i].name, 0xFFFFFF, 255);
+    }
+}
+
+static int desktop_disk_press(int x, int y)
+{
+    for (int i = 0; i < desk_nvol; i++) {
+        int dx, dy;
+        desk_disk_rect(i, &dx, &dy);
+        if (x < dx + 10 || x >= dx + 100 || y < dy - 4 || y >= dy + 90) continue;
+        uint32_t now = debugmon_uptime_ms();
+        if (desk_last_click == i && now - desk_click_ms < 450) {   /* a double click opens it */
+            wm_gfx_open_native("files", desk_vols[i].path);
+            desk_last_click = -1;
+        } else { desk_last_click = i; desk_click_ms = now; }
+        desk_sel = i;
+        dirty = 1;
+        return 1;
+    }
+    if (desk_sel >= 0) { desk_sel = -1; dirty = 1; }
+    return 0;
+}
+
+static void poll_volumes(void)
+{
+    static uint32_t last;
+    uint32_t now = debugmon_uptime_ms();
+    if (now - last < 500) return;
+    last = now;
+    int ev = volumes_poll();
+    if (ev == VOLUMES_NONE) return;
+    dirty = 1;
+    if (ev == VOLUMES_UNSAFE) {
+        /* pulled out while mounted: what macOS says, word for word */
+        char body[128] = "Eject \xE2\x80\x9C";
+        strcat(body, volumes_last_name());
+        strcat(body, "\xE2\x80\x9D before disconnecting or turning it off.");
+        notify_post("System", "doc48_disk", "Disk Not Ejected Properly", body, 0, 0);
+    }
+}
+
 static void compose(void)
 {
     if (launcher_open) { draw_launcher(); return; }
     draw_wallpaper();
+    draw_desktop_disks();
     int order[MAX_WINDOWS], n = 0;
     for (int i = 0; i < MAX_WINDOWS; i++) if (windows[i].open && !windows[i].minimized) order[n++] = i;
     for (int i = 1; i < n; i++) {
@@ -1208,6 +1282,7 @@ static void compose(void)
     draw_dock();
     draw_topbar();
     draw_menu();
+    notify_draw(&bs, SW, SH, TOPBAR_H);
     draw_sheet();
 }
 
@@ -1275,6 +1350,7 @@ int uihost_get(const char *key)
     if (!strcmp(key, "wallpaper")) return wallpaper_choice;
     if (!strcmp(key, "width")) return SW;
     if (!strcmp(key, "height")) return SH;
+    if (!strcmp(key, "dnd")) return notify_dnd();
     return -1;
 }
 
@@ -1284,6 +1360,7 @@ void uihost_set(const char *key, int v)
     else if (!strcmp(key, "dock_magnify")) dock_magnify = v;
     else if (!strcmp(key, "mouse_speed")) mouse_speed = v;
     else if (!strcmp(key, "wallpaper")) set_wallpaper(v);
+    else if (!strcmp(key, "dnd")) notify_set_dnd(v);
     else if (!strcmp(key, "resolution")) {
         static const int rw[5] = { 1024, 1280, 1366, 1600, 1920 }, rh[5] = { 768, 720, 768, 900, 1080 };
         if (v >= 0 && v < 5) set_resolution(rw[v], rh[v]);
@@ -1308,6 +1385,7 @@ static void prefs_save(void)
     strcat(b, "\nspeed="); n[0] = 0; fmt_num(n, (uint32_t)mouse_speed); strcat(b, n);
     strcat(b, "\nwidth="); n[0] = 0; fmt_num(n, (uint32_t)SW); strcat(b, n);
     strcat(b, "\nheight="); n[0] = 0; fmt_num(n, (uint32_t)SH); strcat(b, n);
+    strcat(b, "\ndnd="); n[0] = 0; fmt_num(n, (uint32_t)notify_dnd()); strcat(b, n);
     strcat(b, "\n");
     char p[96];
     prefs_path(p);
@@ -1337,6 +1415,7 @@ static void prefs_load(void)
     ui_set_dark(pref_int(t, "dark", 1));
     dock_magnify = pref_int(t, "magnify", 1);
     mouse_speed = pref_int(t, "speed", 1);
+    notify_set_dnd(pref_int(t, "dnd", 0));
     int w = pref_int(t, "width", 1280), h = pref_int(t, "height", 720);
     free(d);
     if (w != SW || h != SH) set_resolution(w, h);
@@ -1513,6 +1592,24 @@ static window_t *window_at(int x, int y)
 
 static void press(int x, int y)
 {
+    /* notifications sit above everything but the password sheet */
+    {
+        char app[24];
+        int was_open = notify_center_is_open();
+        if (notify_press(x, y, app, sizeof(app))) {
+            dirty = 1;
+            if (app[0]) wm_open_app(app);
+            return;
+        }
+        if (was_open) dirty = 1;
+        if (y < TOPBAR_H && x >= clock_x && x < clock_x + clock_w) {
+            if (!was_open) notify_center_toggle();
+            menu_which = 0; launcher_open = 0;
+            sound_click();
+            dirty = 1;
+            return;
+        }
+    }
     /* menus first: a click inside chooses, anywhere else closes */
     if (menu_which) {
         int i = menu_hit(x, y);
@@ -1552,7 +1649,7 @@ static void press(int x, int y)
         return;
     }
     window_t *w = window_at(x, y);
-    if (!w) return;
+    if (!w) { desktop_disk_press(x, y); return; }
     int was_focused = (w == wm_focused);
     wm_focus_window(w);
     dirty = 1;
@@ -1738,6 +1835,9 @@ void wm_gfx_tick(void)
         if (s != w->g_sum) { w->g_sum = s; dirty = 1; }
     }
 
+    if (notify_tick()) dirty = 1;
+    poll_volumes();
+
     cmos_time_t t;
     cmos_get_time(&t);
     if (t.minute != last_minute) { last_minute = t.minute; dirty = 1; }
@@ -1753,3 +1853,14 @@ void wm_gfx_tick(void)
         cursor_draw();
     }
 }
+
+/* ------------------------------------------------------------------ notifications for apps */
+
+int uihost_notify(const char *app, const char *icon, const char *title, const char *body, const char *act1, const char *act2)
+{
+    int id = notify_post(app, icon, title, body, act1, act2);
+    dirty = 1;
+    return id;
+}
+
+int uihost_notify_result(int id) { return notify_result(id); }

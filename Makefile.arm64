@@ -84,7 +84,7 @@ OBJS += $(NET_OBJS) \
         $(ARCH_DIR)/netcompat.arm.o $(ARCH_DIR)/csprng_arm.arm.o $(ARCH_DIR)/nic_arm.arm.o \
         $(ARCH_DIR)/netcmd.arm.o $(ARCH_DIR)/desktop.arm.o \
         kernel/display/gfx.arm.o kernel/display/png.arm.o kernel/display/ui_assets.arm.o \
-        kernel/display/uiapp.arm.o kernel/display/imgload.arm.o kernel/display/jpeg.arm.o \
+        kernel/display/uiapp.arm.o kernel/display/imgload.arm.o kernel/display/jpeg.arm.o kernel/display/wm_notify.arm.o \
         $(patsubst %.c,%.arm.o,$(wildcard kernel/display/apps/*.c)) \
         $(ARCH_DIR)/uihost_arm.arm.o $(ARCH_DIR)/apps_arm.arm.o
 

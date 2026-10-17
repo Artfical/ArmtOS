@@ -26,7 +26,7 @@ def add(data: bytes) -> int:
 
 # ---------------------------------------------------------------- proportional fonts
 UI_CODEPOINTS = list(range(32, 127)) + list(range(160, 256)) + \
-                [0x11E, 0x11F, 0x130, 0x131, 0x15E, 0x15F, 0x2013, 0x2014, 0x2022, 0x2026, 0x2190, 0x2192, 0x2318]
+                [0x11E, 0x11F, 0x130, 0x131, 0x15E, 0x15F, 0x2013, 0x2014, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2026, 0x2713, 0x2190, 0x2192, 0x2318]
 
 fonts_c = []
 def make_font(cname, path, size):
@@ -312,8 +312,47 @@ def padlock(size):
 
 add_image('padlock', padlock(80))
 
+# an external disk, like macOS's: a silver drive with a dark slot and an orange light
+def disk_icon(size):
+    S = size * 4
+    im = Image.new('RGBA', (S, S), (0, 0, 0, 0))
+    x0, x1, y0, y1 = int(S * 0.08), int(S * 0.92), int(S * 0.26), int(S * 0.80)
+    sh = Image.new('L', (S, S), 0)
+    ImageDraw.Draw(sh).rounded_rectangle([x0, y0 + S // 24, x1, y1 + S // 24], radius=int(S * 0.08), fill=80)
+    sh = sh.filter(ImageFilter.GaussianBlur(S * 0.03))
+    im = Image.composite(Image.new('RGBA', (S, S), (0, 0, 0, 255)), im, sh)
+    body = Image.new('RGBA', (S, S), (0, 0, 0, 0))
+    bd = ImageDraw.Draw(body)
+    for y in range(y0, y1 + 1):
+        t = (y - y0) / (y1 - y0)
+        c = int(244 - 58 * t)
+        bd.line([(0, y), (S, y)], fill=(c, c + 1, c + 4, 255))
+    mask = Image.new('L', (S, S), 0)
+    ImageDraw.Draw(mask).rounded_rectangle([x0, y0, x1, y1], radius=int(S * 0.08), fill=255)
+    im = Image.composite(body, im, mask)
+    d = ImageDraw.Draw(im)
+    d.rounded_rectangle([x0, y0, x1, y1], radius=int(S * 0.08), outline=(150, 152, 160, 255), width=max(2, S // 80))
+    d.line([(x0 + S // 30, y0 + S // 40), (x1 - S // 30, y0 + S // 40)], fill=(255, 255, 255, 255), width=max(2, S // 70))
+    d.line([(x0, int(S * 0.62)), (x1, int(S * 0.62))], fill=(160, 162, 170, 255), width=max(2, S // 90))
+    d.rounded_rectangle([int(S * 0.18), int(S * 0.68), int(S * 0.56), int(S * 0.73)], radius=S // 60, fill=(70, 72, 80, 255))
+    d.ellipse([int(S * 0.74), int(S * 0.67), int(S * 0.81), int(S * 0.74)], fill=(255, 150, 30, 255))
+    return im.resize((size, size), Image.LANCZOS)
+
+for sz in (64, 48, 20):
+    add_image(f'doc{sz}_disk', disk_icon(sz))
+
+# the eject mark: a triangle over a bar, white on transparent like the other glyphs
+S = 64
+ej = Image.new('L', (S, S), 0)
+d = ImageDraw.Draw(ej)
+d.polygon([(32, 10), (54, 36), (10, 36)], fill=255)
+d.rounded_rectangle([10, 44, 54, 53], radius=2, fill=255)
+ej = ej.resize((16, 16), Image.LANCZOS)
+rgba = Image.new('RGBA', (16, 16), (255, 255, 255, 0)); rgba.putalpha(ej)
+add_image('glyph_eject', rgba)
+
 # small monochrome glyphs for the top bar and window buttons (white on transparent)
-for g in ['ethernet-port', 'sun', 'moon', 'user', 'users', 'mouse-pointer', 'layout-panel-top', 'image', 'info', 'lock', 'list', 'layout-grid', 'chevron-left', 'folder', 'hard-drive', 'download', 'file-text', 'wifi', 'volume-2', 'battery-full', 'search', 'power', 'bell', 'x', 'minus', 'maximize-2', 'house', 'monitor', 'cpu', 'chevron-right']:
+for g in ['pencil', 'paint-bucket', 'type', 'eraser', 'pipette', 'zoom-in', 'zoom-out', 'brush', 'spray-can', 'pen-tool', 'highlighter', 'square', 'circle', 'triangle', 'star', 'minus', 'arrow-right', 'diamond', 'crop', 'scaling', 'rotate-ccw', 'rotate-cw', 'flip-horizontal', 'flip-vertical', 'square-dashed', 'layers', 'plus', 'trash-2', 'eye', 'eye-off', 'undo-2', 'redo-2', 'palette', 'copy', 'scissors', 'clipboard', 'heart', 'hexagon', 'move', 'maximize', 'grid-3x3', 'droplet', 'save', 'folder-open', 'arrow-up', 'arrow-down', 'pentagon', 'ethernet-port', 'sun', 'moon', 'user', 'users', 'mouse-pointer', 'layout-panel-top', 'image', 'info', 'lock', 'list', 'layout-grid', 'chevron-left', 'folder', 'hard-drive', 'download', 'file-text', 'wifi', 'volume-2', 'battery-full', 'search', 'power', 'bell', 'x', 'minus', 'maximize-2', 'house', 'monitor', 'cpu', 'chevron-right']:
     S = 64
     f = ImageFont.truetype(lucide_path, 52)
     im = Image.new('L', (S, S), 0)

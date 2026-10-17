@@ -1,3 +1,4 @@
+#include "wm_notify.h"
 #include <stdint.h>
 #include "bcm.h"
 #include "uart.h"
@@ -267,7 +268,7 @@ static int menu_hit(int x, int y)
     return (y >= TOPBAR_H + 6 && i >= 0 && i < NMENU) ? i : -1;
 }
 
-static int eth_x = -100, cpu_x = -100;
+static int eth_x = -100, cpu_x = -100, clock_x = 10000, search_x = -100;
 
 static void draw_topbar(void)
 {
@@ -282,9 +283,14 @@ static void draw_topbar(void)
     cmos_time_t t;
     cmos_get_time(&t);
     char clk[8] = { (char)('0' + t.hour / 10), (char)('0' + t.hour % 10), ':', (char)('0' + t.minute / 10), (char)('0' + t.minute % 10), 0 };
-    int rx = SW - 14 - gfx_text_width(&ui_font_medium, clk);
+    int cw = gfx_text_width(&ui_font_medium, clk);
+    int rx = SW - 14 - cw;
+    if (notify_center_is_open()) gfx_rrect(&bs, rx - 8, 3, cw + 16, TOPBAR_H - 6, 6, ui_theme.dark ? 0xFFFFFF : 0x000000, 30);
     gfx_text(&bs, &ui_font_medium, rx, 6, clk, tc, 255);
+    clock_x = rx - 8;
     rx -= 30;
+    if (notify_dnd()) { gfx_blit_tinted(&bs, gfx_image("glyph_moon"), rx, 6, tc, 230); rx -= 28; }
+    search_x = rx;
     gfx_blit_tinted(&bs, gfx_image("glyph_search"), rx, 6, tc, 230);
     rx -= 28;
     gfx_blit_tinted(&bs, gfx_image("glyph_ethernet-port"), rx, 6, tc, netcmd_is_up() && net_ip ? 230 : 90);
@@ -356,6 +362,7 @@ static void compose(void)
     for (int i = 0; i < n; i++) draw_window(order[i]);
     draw_dock();
     draw_topbar();
+    notify_draw(&bs, SW, SH, TOPBAR_H);
 }
 
 /* ------------------------------------------------------------------ the framebuffer */
@@ -492,6 +499,7 @@ int desktop_get(const char *key)
     if (!strcmp(key, "wallpaper")) return wallpaper_choice;
     if (!strcmp(key, "width")) return SW;
     if (!strcmp(key, "height")) return SH;
+    if (!strcmp(key, "dnd")) return notify_dnd();
     return -1;
 }
 
@@ -501,6 +509,7 @@ void desktop_set(const char *key, int v)
     else if (!strcmp(key, "dock_magnify")) dock_magnify = v;
     else if (!strcmp(key, "mouse_speed")) mouse_speed = v;
     else if (!strcmp(key, "wallpaper")) set_wallpaper(v);
+    else if (!strcmp(key, "dnd")) notify_set_dnd(v);
     else if (!strcmp(key, "resolution")) {
         static const int rw[5] = { 1024, 1280, 1366, 1600, 1920 }, rh[5] = { 768, 720, 768, 900, 1080 };
         if (v >= 0 && v < 5) set_resolution(rw[v], rh[v]);
@@ -520,6 +529,14 @@ static void restart(void)
 
 static void press(int x, int y)
 {
+    /* notifications first: banners, and Notification Centre while it is open */
+    {
+        char app[24];
+        int was_open = notify_center_is_open();
+        if (notify_press(x, y, app, sizeof(app))) { dirty = 1; if (app[0]) desktop_open(app, 0); return; }
+        if (was_open) dirty = 1;
+        if (y < TOPBAR_H && x >= clock_x) { if (!was_open) notify_center_toggle(); menu_open = launcher_open = 0; dirty = 1; return; }
+    }
     if (menu_open) {
         int i = menu_hit(x, y);
         menu_open = 0;
@@ -541,7 +558,7 @@ static void press(int x, int y)
         if (x < 40) { menu_open = 1; hover_menu = -1; dirty = 1; }
         else if (x >= eth_x - 6 && x < eth_x + 22) desktop_open("netmon", 0);
         else if (x >= cpu_x - 6 && x < cpu_x + 22) desktop_open("system", 0);
-        else if (x > SW - 90 && x < SW - 50) { launcher_open = 1; dirty = 1; }
+        else if (x >= search_x - 6 && x < search_x + 22) { launcher_open = 1; dirty = 1; }
         return;
     }
     int d = dock_hit(x, y);
@@ -629,6 +646,7 @@ void desktop_tick(void)
         if (!wins[i].minimized && ap->cls->tick && ap->cls->tick(ap)) dirty = 1;
         if (ap->dirty) { ap->dirty = 0; dirty = 1; }
     }
+    if (notify_tick()) dirty = 1;
     cmos_time_t t;
     cmos_get_time(&t);
     if (t.minute != last_minute) { last_minute = t.minute; dirty = 1; }
@@ -691,4 +709,13 @@ int desktop_start(int w, int h)
     uart_puts(usbhid_has_mouse() ? ", USB mouse" : ", no mouse");
     uart_puts(usbhid_has_keyboard() ? ", USB keyboard\n" : ", no keyboard (type on the serial console)\n");
     return 0;
+}
+
+/* ------------------------------------------------------------------ notifications for apps */
+
+int desktop_notify(const char *app, const char *icon, const char *title, const char *body, const char *act1, const char *act2)
+{
+    int id = notify_post(app, icon, title, body, act1, act2);
+    dirty = 1;
+    return id;
 }
