@@ -13,5 +13,6 @@ void sound_click(void); /* button / menu item click */
 void sound_open(void);  /* window opened */
 void sound_close(void); /* window closed */
 void sound_error(void); /* invalid action / error dialog */
+void sound_notify(void); /* a notification arrived */
 
 #endif

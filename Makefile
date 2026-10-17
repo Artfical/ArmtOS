@@ -140,6 +140,7 @@ KERNEL_OBJS = \
     kernel/lib/udivdi3.o \
     kernel/fs/fs.o \
     kernel/fs/vfs.o \
+    kernel/fs/volumes.o \
     kernel/fs/fsbridge.o \
     kernel/fs/syscall.o \
     kernel/core/serial.o \
@@ -188,6 +189,7 @@ KERNEL_OBJS = \
     kernel/display/gui.o \
     kernel/display/wm.o \
     kernel/display/wm_gfx.o \
+    kernel/display/wm_notify.o \
     kernel/display/gfx.o \
     kernel/display/ui_assets.o \
     kernel/display/uiapp.o \

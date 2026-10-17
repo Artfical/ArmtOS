@@ -738,3 +738,46 @@ void cmd_kill(int argc, char **args)
     }
 }
 
+
+/* notify [-a app] [-i icon] [-b button]... [-w] <title> [body]  /  notify dnd on|off */
+int uihost_notify(const char *app, const char *icon, const char *title, const char *body, const char *act1, const char *act2);
+int uihost_notify_result(int id);
+int uihost_get(const char *key);
+void uihost_set(const char *key, int value);
+
+void cmd_notify(int argc, char **args)
+{
+    const char *app = "Terminal", *icon = 0, *title = 0, *body = 0, *act[2] = { 0, 0 };
+    int nact = 0, wait = 0;
+    if (argc == 3 && !strcmp(args[1], "dnd")) {
+        uihost_set("dnd", !strcmp(args[2], "on"));
+        terminal_writestring(uihost_get("dnd") ? "Do Not Disturb is on\n" : "Do Not Disturb is off\n");
+        return;
+    }
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(args[i], "-a") && i + 1 < argc) app = args[++i];
+        else if (!strcmp(args[i], "-i") && i + 1 < argc) icon = args[++i];
+        else if (!strcmp(args[i], "-b") && i + 1 < argc) { if (nact < 2) act[nact++] = args[++i]; else i++; }
+        else if (!strcmp(args[i], "-w")) wait = 1;
+        else if (!title) title = args[i];
+        else if (!body) body = args[i];
+    }
+    if (!title) {
+        terminal_writestring("usage: notify [-a app] [-i icon] [-b button]... [-w] <title> [body]\n"
+                             "       notify dnd on|off\n");
+        return;
+    }
+    if (!icon) icon = strcmp(app, "Terminal") ? app : "terminal";
+    int id = uihost_notify(app, icon, title, body, act[0], act[1]);
+    if (id < 0) { terminal_writestring("notify: no desktop to show it on\n"); return; }
+    if (!wait) return;
+    /* -w: wait for the answer and print it (the button's label, "clicked" or "closed") */
+    uint32_t start = debugmon_uptime_ms();
+    int r = 0;
+    while ((r = uihost_notify_result(id)) == 0 && debugmon_uptime_ms() - start < 300000) task_yield();
+    if (r == 1 || r == 2) terminal_writestring(act[r - 1]);
+    else if (r == 3) terminal_writestring("clicked");
+    else if (r == 0) terminal_writestring("timeout");
+    else terminal_writestring("closed");
+    terminal_writestring("\n");
+}

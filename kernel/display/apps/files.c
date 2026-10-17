@@ -190,6 +190,34 @@ static void place_path(int i, char *out)
 
 static int place_y(int i) { return i < FIRST_LOCATION ? 34 + i * 28 : 34 + i * 28 + 34; }
 
+/* removable disks follow the locations, each with an eject button, like the Finder's sidebar */
+static uihost_volume_t vols[4];
+static int nvols = -1;
+static uint32_t vols_ms;
+
+static void refresh_vols(void) { nvols = uihost_volumes(vols, 4); vols_ms = uihost_ms(); }
+
+static int under(const char *dir, const char *root)
+{
+    int l = (int)strlen(root);
+    return !strncmp(dir, root, (size_t)l) && (dir[l] == 0 || dir[l] == '/');
+}
+
+static void eject(files_t *f, int i)
+{
+    char path[64], name[32];
+    strcpy(path, vols[i].path);
+    strcpy(name, vols[i].name);
+    if (under(f->dir, path)) go(f, uihost_home());       /* step out of it first */
+    if (uihost_eject(path) != 0) {
+        char body[160] = "The disk \xE2\x80\x9C";
+        strcat(body, name);
+        strcat(body, "\xE2\x80\x9D wasn\xE2\x80\x99t ejected because one or more programs may be using it.");
+        uihost_notify("files", "doc48_disk", "Disk in use", body, 0, 0);
+    }
+    refresh_vols();
+}
+
 static void f_init(uiapp_t *a, const char *arg)
 {
     files_t *f = a->st;
@@ -221,6 +249,16 @@ static void f_draw(uiapp_t *a, gfx_surface_t *s, int x, int y, int w, int h)
         const gfx_image_t *g = gfx_image(places[i].glyph);
         if (g) gfx_blit_tinted(s, g, x + 18, py + 5, UI_ACCENT, 255);
         gfx_text(s, &ui_font_regular, x + 44, py + 4, places[i].label, UI_TEXT, 255);
+    }
+    if (nvols < 0) refresh_vols();
+    for (int i = 0; i < nvols; i++) {
+        int on = !strcmp(vols[i].path, f->dir), py = y + place_y(NPLACES + i);
+        if (on) gfx_rrect(s, x + 8, py, SIDE_W - 16, 26, 6, ui_theme.dark ? 0x3A3C46 : 0xD8D8DE, 255);
+        gfx_blit_tinted(s, gfx_image("glyph_hard-drive"), x + 18, py + 5, UI_DIM, 255);
+        gfx_surface_t lc = *s;
+        gfx_clip(&lc, x + 44, py, SIDE_W - 44 - 34, 26);
+        gfx_text(&lc, &ui_font_regular, x + 44, py + 4, vols[i].name, UI_TEXT, 255);
+        gfx_blit_tinted(s, gfx_image("glyph_eject"), x + SIDE_W - 32, py + 5, UI_DIM, 255);
     }
     gfx_fill(s, x + SIDE_W, y, 1, h, UI_LINE);
 
@@ -382,6 +420,11 @@ static void f_press(uiapp_t *a, int px, int py, int b)
     if (px < SIDE_W) {
         for (int i = 0; i < NPLACES; i++)
             if (py >= place_y(i) && py < place_y(i) + 26) { char p[160]; place_path(i, p); go(f, p); }
+        for (int i = 0; i < nvols; i++)
+            if (py >= place_y(NPLACES + i) && py < place_y(NPLACES + i) + 26) {
+                if (px >= SIDE_W - 40) eject(f, i);
+                else go(f, vols[i].path);
+            }
         return;
     }
     int bx = SIDE_W + 1, bw = a->w - SIDE_W - 1;
@@ -462,7 +505,28 @@ static void f_wheel(uiapp_t *a, int d)
     a->dirty = 1;
 }
 
+/* disks come and go: look twice a second, and leave a disk that was pulled out */
+static int f_tick(uiapp_t *a)
+{
+    files_t *f = a->st;
+    if (uihost_ms() - vols_ms < 500) return 0;
+    int before = nvols;
+    char old[4][64];
+    for (int i = 0; i < nvols && i < 4; i++) strcpy(old[i], vols[i].path);
+    refresh_vols();
+    int changed = before != nvols;
+    for (int i = 0; i < nvols && !changed; i++) if (strcmp(old[i], vols[i].path)) changed = 1;
+    if (!changed) return 0;
+    if (under(f->dir, "/Volumes")) {
+        int still = 0;
+        for (int i = 0; i < nvols; i++) if (under(f->dir, vols[i].path)) still = 1;
+        if (!still) go(f, uihost_home());
+    }
+    if (!strcmp(f->dir, "/Volumes") || !strcmp(f->dir, "/")) load(f);
+    return 1;
+}
+
 const uiapp_class_t app_files = {
     "files", "Files", "files", 820, 480, 1, sizeof(files_t),
-    f_init, f_draw, f_press, 0, 0, f_key, f_wheel, 0, 0,
+    f_init, f_draw, f_press, 0, 0, f_key, f_wheel, f_tick, 0,
 };

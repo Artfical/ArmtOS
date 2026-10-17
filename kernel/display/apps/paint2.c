@@ -56,6 +56,7 @@ typedef struct {
     ui_filedlg_t dlg;
     int dlg_for;                    /* 1 open, 2 save */
     int lastw, lasth;               /* the window size the zoom was fitted to */
+    int notif;                      /* the "Picture saved" notification, while it can be answered */
     uint32_t rng;
 } pt_t;
 
@@ -852,7 +853,14 @@ static void save(uiapp_t *a, pt_t *p, int as)
     if (as || !p->path[0]) { ui_filedlg_open(&p->dlg, 1, 0, "Drawing.png"); p->dlg_for = 2; return; }
     drop_floating(p);
     composite(p);
-    strcpy(p->msg, img_save_png(p->path, p->comp, (uint32_t)p->W, (uint32_t)p->H) == 0 ? "Saved" : "Could not save");
+    int ok = img_save_png(p->path, p->comp, (uint32_t)p->W, (uint32_t)p->H) == 0;
+    strcpy(p->msg, ok ? "Saved" : "Could not save");
+    if (ok) {
+        char body[128];
+        strcpy(body, ui_basename(p->path));
+        strcat(body, " was saved.");
+        p->notif = uihost_notify("paint", 0, "Picture saved", body, "Show in Files", 0);
+    } else uihost_notify("paint", 0, "Could not save the picture", "The disk may be full or read-only.", 0, 0);
     (void)a;
 }
 
@@ -939,10 +947,10 @@ static void image_action(uiapp_t *a, pt_t *p, int i)
     fit(a, p);
 }
 
-static int menu_hit(pt_t *p, int px, int py, int *item)
+static int menu_hit(int menu, int px, int py, int *item)
 {
-    int mx0 = p->menu == 1 ? 8 : p->menu == 2 ? 60 : 112, n = p->menu == 1 ? NFILE : p->menu == 2 ? NEDIT : NVIEW;
-    int w = p->menu == 3 ? 210 : 190;
+    int mx0 = menu == 1 ? 8 : menu == 2 ? 60 : 112, n = menu == 1 ? NFILE : menu == 2 ? NEDIT : NVIEW;
+    int w = menu == 3 ? 210 : 190;
     if (px < mx0 || px >= mx0 + w || py < MENU_H + 4 || py >= MENU_H + 4 + n * 26) return 0;
     *item = (py - MENU_H - 4) / 26;
     return 1;
@@ -972,7 +980,7 @@ static void p_press(uiapp_t *a, int px, int py, int b)
         int item;
         int m = p->menu;
         p->menu = 0;
-        if (menu_hit(p, px, py, &item)) {
+        if (menu_hit(m, px, py, &item)) {
             const char *const *items = m == 1 ? file_items : m == 2 ? edit_items : view_items;
             if (items[item][0] != '-') menu_action(a, p, m, item);
             return;
@@ -1165,6 +1173,19 @@ static int p_tick(uiapp_t *a)
     pt_t *p = a->st;
     static uint32_t blink;
     uint32_t t = uihost_ms() / 500;
+    if (p->notif > 0 && (t & 1)) {                        /* "Show in Files" opens the folder it is in */
+        int r = uihost_notify_result(p->notif);
+        if (r != 0) {
+            if (r == 1) {
+                char dir[224];
+                strcpy(dir, p->path);
+                char *slash = 0;
+                for (char *c = dir; *c; c++) if (*c == '/') slash = c;
+                if (slash) { if (slash == dir) slash[1] = 0; else *slash = 0; uihost_open("files", dir); }
+            }
+            p->notif = 0;
+        }
+    }
     if (p->typing && t != blink) { blink = t; return 1; }
     return 0;
 }

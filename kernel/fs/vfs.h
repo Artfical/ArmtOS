@@ -55,6 +55,7 @@ typedef struct vfs_ops {
 int  vfs_init(void);
 int  vfs_mount(const char *path, vfs_ops_t *ops, void *private_data);
 int  vfs_unmount(const char *path);
+int  vfs_unmount_force(const char *path);     /* also with files open: the device is gone */
 int  vfs_open(const char *path, int flags);
 int  vfs_close(int fd);
 int  vfs_read(int fd, void *buf, uint32_t size);

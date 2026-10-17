@@ -66,3 +66,4 @@ void sound_click(void) { play2(1800, 15, 0, 0); }
 void sound_open(void)  { play2(660, 30, 990, 40); }
 void sound_close(void) { play2(880, 30, 550, 40); }
 void sound_error(void) { play2(220, 60, 220, 60); }
+void sound_notify(void) { play2(1320, 40, 1760, 70); }

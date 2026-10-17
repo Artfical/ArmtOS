@@ -42,6 +42,7 @@ int blockdev_register_ata(ata_device_t *dev);
 int blockdev_register_ahci(ahci_hba_t *hba, int port, uint64_t sectors);
 int blockdev_register_nvme(nvme_device_t *dev);
 int blockdev_register_usb(usb_msd_device_t *dev);
+int blockdev_unregister(blockdev_t *bd);      /* the device went away */
 
 int blockdev_count(void);
 blockdev_t *blockdev_get(int index);

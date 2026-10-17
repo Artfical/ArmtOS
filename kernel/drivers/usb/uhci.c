@@ -3,11 +3,13 @@
 #include "io.h"
 #include "memory.h"
 #include "string.h"
+#include "klog.h"
 
 #define FRAME_NUM 1024
 
 unsigned char _uhci_dma[65536] __attribute__((aligned(4096)));
 static uint32_t _dma_pos;
+static uint32_t _dma_base;        /* past the frame list and queue head, which stay for good */
 
 static uhci_controller_t _saved_ctrl;
 static int _uhci_ready = 0;
@@ -15,11 +17,22 @@ static int _uhci_ready = 0;
 static void *dma_zalloc(uint32_t sz, uint32_t *phys)
 {
     _dma_pos = (_dma_pos + 15) & ~15;
+    /* transfer descriptors are only alive for one transfer at a time: once the area is used up,
+     * start again from the beginning instead of running off its end */
+    if (_dma_pos + ((sz + 15) & ~15) > sizeof(_uhci_dma)) _dma_pos = _dma_base;
     *phys = (uint32_t)(_uhci_dma + _dma_pos);
     void *p = _uhci_dma + _dma_pos;
     _dma_pos += (sz + 15) & ~15;
     memset(p, 0, (sz + 15) & ~15);
     return p;
+}
+
+static void klog_hex(uint32_t v)
+{
+    char b[11] = "0x";
+    for (int i = 0; i < 8; i++) b[2 + i] = "0123456789abcdef"[(v >> (28 - 4 * i)) & 15];
+    b[10] = 0;
+    klog_write(b);
 }
 
 #define r16(c, r) inw((c)->io_base + (r))
@@ -38,9 +51,13 @@ int uhci_init(uhci_controller_t *c)
 
     pci_device_t devs[4];
     int n = pci_find_devices(0x0C, 0x03, devs, 4);
-    if (!n) return -1;
+    /* USB controllers share the class: UHCI is programming interface 0x00 (OHCI 0x10, EHCI 0x20,
+     * xHCI 0x30), and with -usb plus an EHCI the UHCI is not necessarily the first one */
+    int pick = -1;
+    for (int i = 0; i < n && pick < 0; i++) if (devs[i].prog_if == 0x00) pick = i;
+    if (pick < 0) { klog_write("uhci: no UHCI controller on the PCI bus\n"); return -1; }
 
-    c->pci = devs[0];
+    c->pci = devs[pick];
     uint32_t bar4 = pci_get_bar(c->pci.bus, c->pci.device, c->pci.func, 4);
     c->io_base = bar4 & 0xFFF0;
 
@@ -71,9 +88,26 @@ int uhci_init(uhci_controller_t *c)
     t = 50000;
     while (r16(c, 2) & 0x20 && --t);
 
+    if (!t) {
+        klog_write("uhci: controller did not start, io ");
+        klog_hex(c->io_base);
+        klog_write(" status ");
+        klog_hex(r16(c, 2));
+        klog_write("\n");
+        return -1;
+    }
+    _dma_base = _dma_pos;
     _saved_ctrl = *c;
     _uhci_ready = 1;
-    return t ? 0 : -1;
+    return 0;
+}
+
+/* is something plugged into the root port? (no reset, just the connect status bit) */
+int uhci_port_connected(uhci_controller_t *c, int port)
+{
+    uint16_t s = r16(c, 16 + port * 2);
+    if (s & 2) w16(c, 16 + port * 2, (uint16_t)(s & ~(4 | 8)) | 2);   /* acknowledge the change */
+    return s & 1;
 }
 
 int uhci_port_detect(uhci_controller_t *c, int port)
