@@ -31,10 +31,25 @@ The graphical desktop in QEMU (<code>-vga std</code>, 1280x720):
 </tr>
 <tr>
 <td><img src="docs/screenshots/taskmanager.png" width="420"><br>Activity</td>
-<td><img src="docs/screenshots/paint.png" width="420"><br>Paint</td>
+<td><img src="docs/screenshots/paint.png" width="420"><br>Paint, laid out like Windows 11's: menus, ribbon, layers, zoom</td>
 </tr>
 <tr>
+<td><img src="docs/screenshots/paint_save.png" width="420"><br>Paint: saving through the file dialog</td>
+<td><img src="docs/screenshots/notifications.png" width="420"><br>Notifications: banners with the app's icon, and buttons</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/notification_buttons.png" width="420"><br>A notification that waits for an answer (<code>notify -b Install -b Later</code>)</td>
+<td><img src="docs/screenshots/notification_center.png" width="420"><br>Notification Centre, opened from the clock</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/do_not_disturb.png" width="420"><br>Do Not Disturb: banners silenced, a moon in the top bar</td>
+<td><img src="docs/screenshots/usb_finder.png" width="420"><br>A USB disk: on the desktop and in the Finder's sidebar, with an eject button</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/disk_not_ejected.png" width="420"><br>Pulled out without ejecting: "Disk Not Ejected Properly"</td>
 <td><img src="docs/screenshots/2048.png" width="420"><br>2048</td>
+</tr>
+<tr>
 <td><img src="docs/screenshots/terminal.png" width="420"><br>Terminal</td>
 </tr>
 <tr>
@@ -42,6 +57,34 @@ The graphical desktop in QEMU (<code>-vga std</code>, 1280x720):
 <td><img src="docs/screenshots/crash.png" width="420"><br>Crash screen (<code>crash</code> command)</td>
 </tr>
 </table>
+
+## Notifications and removable disks
+
+Apps post notifications with `uihost_notify()` (`kernel/display/uihost.h`): a banner slides in at
+the top right with the app's icon (or any image, e.g. `doc48_disk`), a title, two lines of text and
+up to two buttons. Plain banners leave after six seconds; ones with buttons wait for an answer,
+which the app reads with `uihost_notify_result()` (1 or 2 for a button, 3 for a click on the
+notification, which also opens the app, -1 when it was closed). Everything stays in
+**Notification Centre**, which opens from the clock. **Do Not Disturb** (a switch in the Centre,
+or `notify dnd on`) silences banners and the chime and shows a moon in the top bar; the Centre
+still collects. From the shell or a script:
+
+```
+notify "Build finished" "tOS.iso is ready"
+notify -a paint "Picture saved" "Drawing.png was saved."
+notify -b Install -b Later -w "Update ready" "tOS 2.1 is ready to install."   # prints the answer
+```
+
+A USB disk (FAT16/FAT32, exFAT, ext2/3/4) plugged in is mounted at `/Volumes/<label>` by itself
+and shows up on the desktop and in the Finder's sidebar with an eject button. Ejecting unmounts
+it; pulling it out without ejecting is noticed and reported as "Disk Not Ejected Properly". In
+QEMU, start with `-usb` and plug a disk in from the monitor:
+
+```
+(qemu) drive_add 0 if=none,id=ud,format=raw,file=usb.img
+(qemu) device_add usb-storage,id=us,drive=ud
+(qemu) device_del us
+```
 
 ## System Requirements
 
